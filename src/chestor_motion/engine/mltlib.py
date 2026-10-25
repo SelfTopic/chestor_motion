@@ -29,7 +29,11 @@ _lib.mlt_frame_get_image.argtypes = [
 ]
 _lib.mlt_frame_get_position.restype = ctypes.c_int
 _lib.mlt_frame_get_position.argtypes = [ctypes.c_void_p]
+_lib.mlt_consumer_start.argtypes = [ctypes.c_void_p]
 _lib.mlt_consumer_stop.argtypes = [ctypes.c_void_p]
+_lib.mlt_producer_seek.argtypes = [ctypes.c_void_p, ctypes.c_int]
+_lib.mlt_producer_set_speed.argtypes = [ctypes.c_void_p, ctypes.c_double]
+_lib.mlt_properties_set_int.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
 
 _initialized = False
 
@@ -57,13 +61,31 @@ class Subscription:
             self._event = None
 
 
-def consumer_stop(consumer_ptr: int) -> None:
-    """Останавливает консьюмер, отпустив GIL.
+# Управление работающим консьюмером и его источником — только через функции ниже.
+# SWIG-вызовы держат GIL, пока ждут мьютексы MLT, а поток консьюмера может держать такой мьютекс
+# и ждать GIL в нашем колбэке frame-show — взаимная блокировка (stop, refresh при перемотке).
+# ctypes на время C-вызова GIL отпускает.
 
-    SWIG-шный `Consumer.stop()` ждёт поток MLT, держа GIL, а этот поток может как раз ждать GIL
-    в нашем колбэке — взаимная блокировка. ctypes на время C-вызова GIL отпускает.
-    """
+
+def consumer_start(consumer_ptr: int) -> None:
+    _lib.mlt_consumer_start(consumer_ptr)
+
+
+def consumer_stop(consumer_ptr: int) -> None:
     _lib.mlt_consumer_stop(consumer_ptr)
+
+
+def consumer_refresh(consumer_ptr: int) -> None:
+    """Перерисовать текущий кадр (после перемотки на паузе). mlt_consumer — это mlt_properties."""
+    _lib.mlt_properties_set_int(consumer_ptr, b"refresh", 1)
+
+
+def producer_seek(producer_ptr: int, position: int) -> None:
+    _lib.mlt_producer_seek(producer_ptr, position)
+
+
+def producer_set_speed(producer_ptr: int, speed: float) -> None:
+    _lib.mlt_producer_set_speed(producer_ptr, speed)
 
 
 def frame_position(frame_ptr: int) -> int:

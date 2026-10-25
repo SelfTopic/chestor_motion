@@ -51,6 +51,9 @@ class Player(QObject):
         self._producer: mlt.Producer | None = None
         self._consumer: mlt.Consumer | None = None
         self._subscription: mltlib.Subscription | None = None
+        # Сырые указатели работающих объектов: управление ими — только через mltlib (без GIL)
+        self._producer_ptr = 0
+        self._consumer_ptr = 0
         self._sink: QVideoSink | None = None
         self._position = 0
         self._length = 0
@@ -124,14 +127,16 @@ class Player(QObject):
         consumer.connect(producer)
 
         self._profile, self._producer, self._consumer = profile, producer, consumer
+        self._producer_ptr = int(producer.get_producer())
+        self._consumer_ptr = int(consumer.get_consumer())
         self._width, self._height = profile.width(), profile.height()
         self._length = producer.get_length()
         self._subscription = mltlib.Subscription(
-            int(consumer.get_consumer()), "consumer-frame-show", self._on_mlt_frame
+            self._consumer_ptr, "consumer-frame-show", self._on_mlt_frame
         )
-        producer.set_speed(0)
-        producer.seek(min(position, self._length - 1))
-        consumer.start()
+        mltlib.producer_set_speed(self._producer_ptr, 0)
+        mltlib.producer_seek(self._producer_ptr, min(position, self._length - 1))
+        mltlib.consumer_start(self._consumer_ptr)
         self.mediaChanged.emit()
         if was_playing:
             self.play()
@@ -141,20 +146,20 @@ class Player(QObject):
 
     @Slot()
     def play(self) -> None:
-        if self._producer is None:
+        if not self._producer_ptr:
             return
         if self._position >= self._length - 1:
-            self._producer.seek(0)
-        self._producer.set_speed(1)
+            mltlib.producer_seek(self._producer_ptr, 0)
+        mltlib.producer_set_speed(self._producer_ptr, 1)
         self._refresh()
         self._set_playing(True)
 
     @Slot()
     def pause(self) -> None:
-        if self._producer is None:
+        if not self._producer_ptr:
             return
-        self._producer.set_speed(0)
-        self._producer.seek(self._position)
+        mltlib.producer_set_speed(self._producer_ptr, 0)
+        mltlib.producer_seek(self._producer_ptr, self._position)
         self._refresh()
         self._set_playing(False)
 
@@ -164,10 +169,10 @@ class Player(QObject):
 
     @Slot(int)
     def seek(self, frame: int) -> None:
-        if self._producer is None:
+        if not self._producer_ptr:
             return
         frame = max(0, min(frame, self._length - 1))
-        self._producer.seek(frame)
+        mltlib.producer_seek(self._producer_ptr, frame)
         self._refresh()
         self._set_position(frame)
 
@@ -183,8 +188,8 @@ class Player(QObject):
     # --- внутреннее ---
 
     def _refresh(self) -> None:
-        if self._consumer is not None:
-            self._consumer.set("refresh", 1)
+        if self._consumer_ptr:
+            mltlib.consumer_refresh(self._consumer_ptr)
 
     def _set_playing(self, playing: bool) -> None:
         if playing != self._playing:
@@ -197,8 +202,8 @@ class Player(QObject):
             self.positionChanged.emit()
 
     def _close(self) -> None:
-        if self._consumer is not None:
-            mltlib.consumer_stop(int(self._consumer.get_consumer()))
+        if self._consumer_ptr:
+            mltlib.consumer_stop(self._consumer_ptr)
         if self._subscription is not None:
             self._subscription.close()
         # Порядок важен: консьюмер ссылается на источник, оба — на профиль
@@ -206,6 +211,7 @@ class Player(QObject):
         self._producer = None
         self._profile = None
         self._subscription = None
+        self._producer_ptr = self._consumer_ptr = 0
         self._length = 0
         self._set_playing(False)
 

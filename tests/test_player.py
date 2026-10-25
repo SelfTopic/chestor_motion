@@ -64,3 +64,18 @@ def test_stop_while_playing_does_not_deadlock(qapp, clip: Path) -> None:
         _wait(40)
         player.shutdown()
     assert not player.playing
+
+
+def test_scrubbing_does_not_deadlock(qapp, clip: Path) -> None:
+    # Перемотка на паузе шлёт refresh; SWIG-вызов держал GIL, пока ждал мьютекс консьюмера,
+    # а консьюмер держал мьютекс и ждал GIL в колбэке — окно зависало при таскании ползунка
+    player = Player(SILENT_AUDIO_OUT)
+    player.load(clip)
+    try:
+        for i in range(20_000):
+            player.seek(i * 7 % player.length)
+            if i % 50 == 0:
+                qapp.processEvents()
+        assert player.position == 19_999 * 7 % player.length
+    finally:
+        player.shutdown()

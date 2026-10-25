@@ -27,8 +27,10 @@
   через сигнал с очередью (колбэк приходит из потока MLT).
 - Пауза — `producer.set_speed(0)`, перемотка — `seek` + `consumer.set("refresh", 1)`.
 - Объекты MLT освобождаются в порядке консьюмер → источник → профиль.
-- SWIG-вызовы mlt7 держат GIL. Всё, что ждёт поток консьюмера (`stop()`), вызывай через
-  `ctypes` (`mltlib.consumer_stop`) — иначе взаимная блокировка с колбэком `frame-show`.
+- SWIG-вызовы mlt7 держат GIL, пока ждут мьютексы MLT, а поток консьюмера держит мьютексы
+  и ждёт GIL в колбэке `frame-show` — взаимная блокировка. Поэтому к **работающим**
+  консьюмеру и источнику — только функции `mltlib` (ctypes, без GIL): start/stop, seek,
+  speed, refresh. SWIG — лишь для настройки до `consumer_start`.
 - Тесты не трогают звуковое устройство: `Player("sdl2_audio")` + `SDL_AUDIODRIVER=dummy`.
 - На `QT_QPA_PLATFORM=offscreen` `VideoOutput` в `grabWindow()` чёрный, хотя кадры приходят:
   кадр проверяй через `sink.videoFrame().toImage()`, вид окна — на настоящем дисплее.

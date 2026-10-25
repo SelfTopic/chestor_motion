@@ -25,7 +25,9 @@ SEARCH_SKIP = {"node_modules", "__pycache__", "site-packages", ".git", ".venv", 
 
 
 def suffixes(mode: str) -> set[str]:
-    """mode: media — видео и звук для импорта, project — файлы проектов."""
+    """mode: media — видео и звук для импорта, project — файлы проектов, folder — только папки."""
+    if mode == "folder":
+        return set()
     return {io.SUFFIX} if mode == "project" else VIDEO_SUFFIXES | AUDIO_SUFFIXES
 
 

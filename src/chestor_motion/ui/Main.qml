@@ -13,7 +13,7 @@ ApplicationWindow {
 
     // Пока открыто окно поверх (файлы, справка), клавиши главного окна молчат: иначе «s»,
     // набранная в поиске, разрезала бы клип
-    readonly property bool modalOpen: fileBrowser.visible || hotkeysPanel.visible
+    readonly property bool modalOpen: fileBrowser.visible || hotkeysPanel.visible || exportPanel.visible
 
     readonly property color bg: "#0f0f11"
     readonly property color panel: "#1a1a1e"
@@ -101,6 +101,8 @@ ApplicationWindow {
           text: "Открыть проект", action: () => fileBrowser.openFor("project") },
         { group: "Проект", keys: ["Ctrl+S"], label: "Ctrl+S",
           text: "Сохранить сейчас (и так сохраняется само)", action: () => session.save() },
+        { group: "Проект", keys: ["Ctrl+E"], label: "Ctrl+E",
+          text: "Экспорт видео", action: () => exportPanel.openPanel() },
         { group: "Проект", keys: ["Ctrl+Shift+S"], label: "Ctrl+Shift+S",
           text: "Сохранить как…", action: () => saveAsDialog.open() },
         { group: "Проект", keys: ["F1"], label: "F1",
@@ -147,9 +149,18 @@ ApplicationWindow {
         onAccepted: (paths) => {
             if (mode === "project")
                 session.openProjectPath(paths[0])
+            else if (mode === "folder")
+                exportPanel.folder = paths[0]
             else
                 session.importPaths(paths)
         }
+    }
+
+    ExportPanel {
+        id: exportPanel
+        objectName: "exportPanel"
+        session: root.session
+        onChooseFolder: (current) => fileBrowser.openFor("folder", current)
     }
 
     FileDialog {
@@ -255,10 +266,29 @@ ApplicationWindow {
                     MenuEntry { text: "Открыть…"; shortcutText: "Ctrl+O"; onTriggered: fileBrowser.openFor("project") }
                     MenuEntry { text: "Сохранить"; shortcutText: "Ctrl+S"; onTriggered: session.save() }
                     MenuEntry { text: "Сохранить как…"; shortcutText: "Ctrl+Shift+S"; onTriggered: saveAsDialog.open() }
+                    MenuSeparator {
+                        contentItem: Rectangle { implicitHeight: 1; color: "#2c2c33" }
+                    }
+                    MenuEntry { text: "Экспорт видео…"; shortcutText: "Ctrl+E"; onTriggered: exportPanel.openPanel() }
                 }
             }
 
             Item { Layout.fillWidth: true }
+
+            // Идёт экспорт, панель свёрнута — процент здесь, клик разворачивает
+            Text {
+                objectName: "exportBadge"
+                visible: session.exportState === "running" && !exportPanel.visible
+                text: "Экспорт " + Math.round(session.exportProgress * 100) + "%"
+                color: root.accent
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: exportPanel.openPanel()
+                }
+            }
 
             Text {
                 visible: session.status !== ""

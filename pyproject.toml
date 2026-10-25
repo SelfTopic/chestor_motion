@@ -1,0 +1,44 @@
+[project]
+name = "chestor-motion"
+version = "0.1.0"
+description = "Video editor for Linux with CapCut-like controls"
+authors = [
+    { name = "CheStor", email = "selftopic@gmail.com" }
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+# PySide6 и mlt7 — системные пакеты (pacman -S pyside6 mlt), не pip:
+# привязки mlt7 собраны под системный Python. Поэтому venv видит системные пакеты (poetry.toml).
+dependencies = []
+
+[project.scripts]
+chestor-motion = "chestor_motion.__main__:main"
+
+[tool.poetry]
+packages = [{ include = "chestor_motion", from = "src" }]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.14.10,<0.15.0)",
+    "pyright (>=1.1.414,<1.2.0)",
+    "pytest (>=9.1.1,<10.0.0)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

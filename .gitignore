@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+*.log
+*.pstats
+
+# Исходники и прокси — пользовательские медиа, не часть репозитория
+*.mp4
+*.mkv
+*.mov
+*.webm
+/media/
+/proxies/

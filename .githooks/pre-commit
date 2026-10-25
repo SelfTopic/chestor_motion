@@ -1,0 +1,8 @@
+#!/bin/sh
+# Те же проверки, что обязательны для каждого коммита (см. CLAUDE.md → Git).
+# Включается один раз: git config core.hooksPath .githooks
+set -e
+poetry run ruff check src tests
+poetry run ruff format --check src tests
+poetry run pyright
+poetry run pytest -q

@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer
 
-from chestor_motion.engine.proxy import ProxyJob, proxy_size
+from chestor_motion.engine.proxy import (
+    CPU_THREADS,
+    MODES,
+    ProxyJob,
+    clean_stale_parts,
+    ffmpeg_args,
+    proxy_size,
+)
 
 
 @pytest.mark.parametrize(
@@ -68,3 +75,41 @@ def test_proxy_reused_from_cache(qapp, clip: Path, tmp_path: Path) -> None:
     second = _run(ProxyJob(clip, (320, 180), 2.0, cache_dir=tmp_path))
     assert second == first
     assert Path(second).stat().st_mtime_ns == mtime
+
+
+def test_args_per_mode() -> None:
+    src, out = Path("/in.mp4"), Path("/out.mp4")
+    gpu = ffmpeg_args(src, out, (640, 360), "gpu")
+    hybrid = ffmpeg_args(src, out, (640, 360), "hybrid")
+    cpu = ffmpeg_args(src, out, (640, 360), "cpu")
+    assert "-hwaccel" in gpu and "h264_vaapi" in gpu
+    assert "-hwaccel" not in hybrid and "hwupload" in " ".join(hybrid) and "h264_vaapi" in hybrid
+    assert "libx264" in cpu and "ultrafast" in cpu
+    for args in (hybrid, cpu):  # процессорные части ограничены двумя потоками
+        assert args[args.index("-threads") + 1] == CPU_THREADS
+    assert MODES == ("gpu", "hybrid", "cpu")
+
+
+def test_10bit_h264_goes_hybrid_not_cpu(qapp, tmp_path: Path) -> None:
+    # Radeon 610M не декодирует H.264 10-bit: раньше это сразу уходило в x264 на все ядра
+    src = tmp_path / "10bit.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p10le", str(src)],
+        check=True,
+    )  # fmt: skip
+    job = ProxyJob(src, (640, 360), 1.0, cache_dir=tmp_path / "p")
+    path = Path(_run(job))
+    assert job.mode == "hybrid"
+    encoder = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream_tags=encoder", "-of", "csv=p=0",
+         str(path)], capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    assert "h264_vaapi" in encoder
+
+
+def test_stale_parts_cleaned(tmp_path: Path) -> None:
+    (tmp_path / "a.part.mp4").write_bytes(b"x")
+    (tmp_path / "b.mp4").write_bytes(b"x")
+    clean_stale_parts(tmp_path)
+    assert [p.name for p in tmp_path.iterdir()] == ["b.mp4"]

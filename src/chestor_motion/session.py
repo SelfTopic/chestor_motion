@@ -15,7 +15,8 @@ from PySide6.QtCore import QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.player import Player
-from chestor_motion.engine.proxy import ProxyJob, proxy_size
+from chestor_motion.engine.proxy import ProxyJob, clean_stale_parts, proxy_size
+from chestor_motion.engine.proxy import default_cache_dir as default_proxy_dir
 from chestor_motion.engine.thumbs import ThumbJob
 from chestor_motion.project import io, model
 from chestor_motion.project.history import History
@@ -57,6 +58,9 @@ class Session(QObject):
         self._cache_dir = cache_dir
         self._data_dir = data_dir or default_data_dir()
         self._state = State(self._data_dir)
+        proxy_dir = cache_dir or default_proxy_dir()
+        if proxy_dir.is_dir():
+            clean_stale_parts(proxy_dir)
         self._path: Path | None = None
         self._saved = Project()
         self._autosave = QTimer(self)
@@ -68,6 +72,9 @@ class Session(QObject):
         self._builder: Builder | None = None
         self._proxies: dict[str, str] = {}
         self._jobs: dict[str, ProxyJob] = {}
+        # Прокси кодируются по одному: пять файлов разом — пять ffmpeg одновременно
+        self._proxy_queue: list[ProxyJob] = []
+        self._proxy_running: ProxyJob | None = None
         self._progress: dict[str, float] = {}
         self._proxy_sizes: dict[str, tuple[int, int]] = {}
         self._lengths: dict[str, int] = {}
@@ -329,6 +336,8 @@ class Session(QObject):
         for job in [*self._jobs.values(), *self._thumb_jobs.values()]:
             job.cancel()
         self._jobs.clear()
+        self._proxy_queue.clear()
+        self._proxy_running = None
         self._thumb_jobs.clear()
         self._progress.clear()
 
@@ -401,8 +410,36 @@ class Session(QObject):
         job.failed.connect(lambda e: self._on_proxy_failed(source, e))
         self._jobs[source] = job
         self._progress[source] = 0.0
-        self._set_status("Создаю прокси…")
-        job.start()
+        if job.output.exists():
+            job.start()  # готовый из кэша — без очереди, кодировать нечего
+            return
+        self._proxy_queue.append(job)
+        self._next_proxy()
+        self._proxy_status()
+
+    def _proxy_status(self) -> None:
+        waiting = len(self._proxy_queue)
+        self._set_status(
+            f"Создаю прокси… (ещё {waiting} в очереди)" if waiting else "Создаю прокси…"
+        )
+
+    def _next_proxy(self) -> None:
+        if self._proxy_running is not None or self._closed:
+            return
+        while self._proxy_queue:
+            job = self._proxy_queue.pop(0)
+            if str(job.source) in self._jobs:  # не отменён, пока ждал
+                self._proxy_running = job
+                self._proxy_status()
+                job.start()
+                return
+
+    def _proxy_done(self, source: str) -> None:
+        job = self._jobs.pop(source, None)
+        self._progress.pop(source, None)
+        if job is not None and job is self._proxy_running:
+            self._proxy_running = None
+            self._next_proxy()
 
     def _on_proxy_progress(self, source: str, progress: float) -> None:
         if source in self._progress:
@@ -412,13 +449,13 @@ class Session(QObject):
     def _on_proxy_ready(self, source: str, proxy: str) -> None:
         if self._closed:
             return
-        self._jobs.pop(source, None)
-        self._progress.pop(source, None)
+        self._proxy_done(source)
         self._proxies[source] = proxy
         if self._builder is not None:
             self._builder.forget(source)
             self._rebuild()
-        self._set_status("" if self._jobs else "Прокси")
+        if not self._jobs:
+            self._set_status("Прокси")
         self._start_thumbs(source, proxy)
 
     def _start_thumbs(self, source: str, proxy: str) -> None:
@@ -444,8 +481,7 @@ class Session(QObject):
         self.thumbsChanged.emit()
 
     def _on_proxy_failed(self, source: str, error: str) -> None:
-        self._jobs.pop(source, None)
-        self._progress.pop(source, None)
+        self._proxy_done(source)
         self._set_status(f"Прокси не создан: {error}")
 
     def _set_status(self, status: str) -> None:

@@ -6,7 +6,7 @@
 
 ```bash
 sudo pacman -S --needed mlt pyside6 ffmpeg libva-utils
-sudo pacman -S --needed --asdeps rtaudio sox movit
+sudo pacman -S --needed --asdeps sox movit
 poetry install
 git config core.hooksPath .githooks
 poetry run chestor-motion

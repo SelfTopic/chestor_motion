@@ -1,8 +1,9 @@
 #!/bin/sh
 # Те же проверки, что обязательны для каждого коммита (см. CLAUDE.md → Git).
 # Включается один раз: git config core.hooksPath .githooks
+# timeout — чтобы зависший тест (например, занятое звуковое устройство) не вешал коммит молча.
 set -e
-poetry run ruff check src tests
-poetry run ruff format --check src tests
-poetry run pyright
-poetry run pytest -q
+timeout 60 poetry run ruff check src tests
+timeout 60 poetry run ruff format --check src tests
+timeout 120 poetry run pyright
+timeout 120 poetry run pytest -q

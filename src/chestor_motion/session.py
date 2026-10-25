@@ -114,6 +114,7 @@ class Session(QObject):
         self._export_error = ""
         player.positionChanged.connect(self.frameChanged)
         self.projectChanged.connect(self.frameChanged)
+        self.selectionChanged.connect(self.frameChanged)  # правится выделенный клип
 
     # --- свойства для QML ---
 
@@ -175,14 +176,24 @@ class Session(QObject):
             return
         self._apply(model.set_canvas(project, *size), position=self._player.position)
 
+    @qproperty(list, notify=frameChanged)
+    def frames(self) -> list:
+        """Видеоклипы под плейхедом сверху вниз и их рамки на холсте — для правки на превью."""
+        out = []
+        for clip in self.project.visible_at(self._player.position):
+            frame = self._frame_of(clip)
+            if frame:
+                out.append(frame)
+        return out
+
     @qproperty(dict, notify=frameChanged)
     def frame(self) -> dict:
-        """Видеоклип под плейхедом и его рамка на холсте в долях холста — для правки на превью.
-        Пустой словарь, если под плейхедом нет видео."""
-        hit = self.project.clip_at(self._player.position)
-        if hit is None:
-            return {}
-        clip = self.project.main[hit[0]]
+        """Клип, который правят на превью: выделенный, если он в кадре, иначе верхний.
+        Пустой словарь, если в кадре нет видео."""
+        frames = self.frames
+        return next((f for f in frames if f["id"] == self._selected), frames[0] if frames else {})
+
+    def _frame_of(self, clip: Clip | model.OverlayClip) -> dict:
         size = self._source_size(clip.source)
         if size is None:
             return {}
@@ -194,7 +205,7 @@ class Session(QObject):
             "y": clip.y,
             "scale": clip.scale,
             "fill": model.fill_scale(canvas, size),
-            # рамка в долях холста; aspect — ширина к высоте самого клипа на холсте
+            # рамка в долях холста
             "left": left / canvas[0],
             "top": top / canvas[1],
             "width": w / canvas[0],
@@ -205,7 +216,8 @@ class Session(QObject):
     def previewTransform(self, clip_id: str, x: float, y: float, scale: float) -> None:
         """Пока клип тащат: двигаем картинку, не трогая модель и историю. Граф пересобирается
         один раз — поставить клипу фильтр, дальше меняется только его прямоугольник."""
-        if not self._is_main(clip_id) or self._builder is None:
+        clip = self._visual(clip_id)
+        if clip is None or self._builder is None:
             return
         if clip_id not in self._transforms:
             self._live = clip_id
@@ -213,7 +225,6 @@ class Session(QObject):
         transform = self._transforms.get(clip_id)
         if transform is None:
             return
-        clip = self.project.main[self.project.index_of(clip_id)]
         scale = min(max(scale, model.MIN_SCALE), model.MAX_SCALE)
         rect = self._builder.rect(clip, x, y, scale)
         # Граф уже у работающего плеера — только ctypes (см. mltlib)
@@ -223,7 +234,7 @@ class Session(QObject):
     @Slot(str, float, float, float)
     def setTransform(self, clip_id: str, x: float, y: float, scale: float) -> None:
         """Отпустили клип — положение в модель, одной правкой для отмены."""
-        if not self._is_main(clip_id):
+        if self._visual(clip_id) is None:
             return
         self._live = ""
         project = model.set_transform(self.project, clip_id, x, y, scale)
@@ -234,17 +245,17 @@ class Session(QObject):
 
     @Slot()
     def toggleFill(self) -> None:
-        """F: заполнить холст клипом (выделенным или под плейхедом), ещё раз — вписать."""
-        clip_id = self._selected if self._is_main(self._selected) else self.frame.get("id", "")
+        """F: заполнить холст клипом (выделенным или верхним в кадре), ещё раз — вписать."""
+        clip_id = self._selected if self._visual(self._selected) else self.frame.get("id", "")
         if clip_id:
             self.fitClip(clip_id, "toggle")
 
     @Slot(str, str)
     def fitClip(self, clip_id: str, mode: str) -> None:
         """mode: fit — вписать по центру, fill — заполнить, toggle — одно или другое."""
-        if not self._is_main(clip_id):
+        clip = self._visual(clip_id)
+        if clip is None:
             return
-        clip = self.project.main[self.project.index_of(clip_id)]
         size = self._source_size(clip.source)
         if size is None:
             return
@@ -274,9 +285,7 @@ class Session(QObject):
             start += c.length
         return out
 
-    @qproperty(list, notify=projectChanged)
-    def audioLanes(self) -> list:
-        """Звуковые дорожки для таймлайна: список дорожек, в каждой — клипы."""
+    def _lane_dicts(self, lanes: tuple[tuple[model.FreeClip, ...], ...]) -> list:
         return [
             [
                 {
@@ -289,17 +298,32 @@ class Session(QObject):
                     "sourceLength": c.source_length,
                     "lane": lane_index,
                     "name": Path(c.source).stem,
+                    "audio": getattr(c, "audio", True),
                 }
                 for c in lane
             ]
-            for lane_index, lane in enumerate(self.project.audio)
+            for lane_index, lane in enumerate(lanes)
         ]
+
+    @qproperty(list, notify=projectChanged)
+    def audioLanes(self) -> list:
+        """Звуковые дорожки для таймлайна: список дорожек, в каждой — клипы."""
+        return self._lane_dicts(self.project.audio)
 
     @qproperty(list, notify=projectChanged)
     def audioClips(self) -> list:
         """Все звуковые клипы одним списком (номер дорожки — в lane): QML-повторителю так проще,
         список списков из Python доходит до QML не как массив JavaScript."""
         return [c for lane in self.audioLanes for c in lane]
+
+    @qproperty(list, notify=projectChanged)
+    def overlayLanes(self) -> list:
+        return self._lane_dicts(self.project.overlays)
+
+    @qproperty(list, notify=projectChanged)
+    def overlayClips(self) -> list:
+        """Клипы наложений одним списком, как audioClips; lane 0 — сразу над основной."""
+        return [c for lane in self.overlayLanes for c in lane]
 
     @qproperty(str, notify=selectionChanged)
     def selectedClip(self) -> str:
@@ -339,7 +363,13 @@ class Session(QObject):
         for path in paths:
             self.import_path(Path(path))
 
-    def import_path(self, path: Path) -> None:
+    @Slot(list)
+    def importOverlayPaths(self, paths: list[str]) -> None:
+        for path in paths:
+            self.import_path(Path(path), overlay=True)
+
+    def import_path(self, path: Path, overlay: bool = False) -> None:
+        """overlay: видео — наложением у плейхеда, а не в конец основной дорожки."""
         source = str(path.resolve())
         try:
             info = probe(source)
@@ -355,6 +385,19 @@ class Session(QObject):
             self.imported.emit()
             self._start_wave(source)
             return
+        # Прокси — до сборки графа: если он уже в кэше, превью сразу откроет его, а не
+        # оригинал (4K-оригинал в превью — сотни мегабайт и подкачка из swap)
+        self._source_sizes[source] = (info.width, info.height)
+        self._start_proxy(source, info.width, info.height, info.length)
+        self._start_wave(source)
+        if overlay and (project.main or project.overlays):
+            at = self._player.position
+            # Вдвое меньше и по центру — сразу видно, что это поверх, а не вместо основного
+            clip = model.OverlayClip(source, info.length, 0, info.length, start=at, scale=0.5)
+            self._apply(model.add_overlay(project, clip), position=at)
+            self.select(clip.id)
+            self.imported.emit()
+            return
         if not project.main and not project.audio:
             # Первый клип задаёт холст, как «Оригинал» в CapCut; выбор сторон — позже
             project = Project(
@@ -363,26 +406,25 @@ class Session(QObject):
         clip = Clip(source=source, source_length=info.length, in_frame=0, out_frame=info.length)
         self._apply(model.add_clip(project, clip), position=project.main_length)
         self.imported.emit()
-        self._source_sizes[source] = (info.width, info.height)
-        self._start_proxy(source, info.width, info.height, info.length)
-        self._start_wave(source)
 
     # --- правки ---
 
     @Slot()
     def splitAtPlayhead(self) -> None:
-        """S: выделенный звуковой клип, если плейхед внутри него, иначе основная дорожка."""
+        """S: выделенный свободный клип (звук, наложение), если плейхед внутри него, иначе
+        основная дорожка."""
         frame = self._player.position
-        found = self.project.audio_clip(self._selected)
-        if found is not None and found[1].start < frame < found[1].end:
-            self._apply(model.split_audio(self.project, self._selected, frame))
+        found = self.project.free_clip(self._selected)
+        if found is not None and found[2].start < frame < found[2].end:
+            self._apply(model.split_free(self.project, self._selected, frame))
         else:
             self._apply(model.split(self.project, frame))
 
     @Slot()
     def detachAudio(self) -> None:
-        """Отделить звук выделенного видеоклипа, а если не выделен — клипа под плейхедом."""
-        clip_id = self._selected if self._is_main(self._selected) else ""
+        """Отделить звук выделенного видеоклипа (основного или наложения), а если не выделен —
+        клипа основной дорожки под плейхедом."""
+        clip_id = self._selected if self._visual(self._selected) else ""
         if not clip_id:
             hit = self.project.clip_at(self._player.position)
             if hit is None:
@@ -396,11 +438,10 @@ class Session(QObject):
             self.select(next(c.id for lane in project.audio for c in lane if c.id not in before))
 
     @Slot(str, int, int)
-    def moveAudio(self, clip_id: str, start: int, lane: int) -> None:
-        if self.project.audio_clip(clip_id) is not None:
-            self._apply(
-                model.move_audio(self.project, clip_id, start, lane), position=max(0, start)
-            )
+    def moveFree(self, clip_id: str, start: int, lane: int) -> None:
+        """Звуковой клип или наложение — по времени и между дорожками своей группы."""
+        if self.project.free_clip(clip_id) is not None:
+            self._apply(model.move_free(self.project, clip_id, start, lane), position=max(0, start))
 
     @Slot()
     def deleteAtPlayhead(self) -> None:
@@ -415,9 +456,9 @@ class Session(QObject):
         if not self._has(self._selected):
             self.deleteAtPlayhead()
             return
-        found = self.project.audio_clip(self._selected)
+        found = self.project.free_clip(self._selected)
         if found is not None:
-            start = found[1].start
+            start = found[2].start
         else:
             start = self.project.clip_start(self.project.index_of(self._selected))
         self._apply(model.delete(self.project, self._selected), position=start)
@@ -430,9 +471,9 @@ class Session(QObject):
 
     @Slot(str, int)
     def trimStart(self, clip_id: str, in_frame: int) -> None:
-        if self.project.audio_clip(clip_id) is not None:
-            project = model.trim_audio_start(self.project, clip_id, in_frame)
-            self._apply(project, position=project.audio_clip(clip_id)[1].start)  # type: ignore[index]
+        if self.project.free_clip(clip_id) is not None:
+            project = model.trim_free_start(self.project, clip_id, in_frame)
+            self._apply(project, position=project.free_clip(clip_id)[2].start)  # type: ignore[index]
             return
         if self._has(clip_id):
             index = self.project.index_of(clip_id)
@@ -442,9 +483,9 @@ class Session(QObject):
 
     @Slot(str, int)
     def trimEnd(self, clip_id: str, out_frame: int) -> None:
-        if self.project.audio_clip(clip_id) is not None:
-            project = model.trim_audio_end(self.project, clip_id, out_frame)
-            self._apply(project, position=project.audio_clip(clip_id)[1].end - 1)  # type: ignore[index]
+        if self.project.free_clip(clip_id) is not None:
+            project = model.trim_free_end(self.project, clip_id, out_frame)
+            self._apply(project, position=project.free_clip(clip_id)[2].end - 1)  # type: ignore[index]
             return
         if self._has(clip_id):
             project = model.trim_end(self.project, clip_id, out_frame)
@@ -578,19 +619,25 @@ class Session(QObject):
         except (OSError, io.ProjectFormatError) as e:
             self._set_status(f"Не удалось открыть проект: {e}")
             return False
-        sources = {c.source for c in project.main} | {
-            c.source for lane in project.audio for c in lane
-        }
+        videos = list(
+            dict.fromkeys(
+                [c.source for c in project.main]
+                + [c.source for lane in project.overlays for c in lane]
+            )
+        )
+        sources = set(videos) | {c.source for lane in project.audio for c in lane}
         missing = sorted(Path(s).name for s in sources if not Path(s).exists())
         if missing:
             self._set_status("Нет исходных файлов: " + ", ".join(missing))
             return False
         self.flush()
-        self._set_project(project, path)
-        for source in dict.fromkeys(c.source for c in project.main):
+        # Прокси до сборки графа — см. import_path
+        for source in videos:
             info = probe(source)
+            self._source_sizes[source] = (info.width, info.height)
             self._start_proxy(source, info.width, info.height, info.length)
             self._start_wave(source)
+        self._set_project(project, path)
         for source in dict.fromkeys(c.source for lane in project.audio for c in lane):
             self._start_wave(source)  # звуковым клипам прокси не нужен
         return True
@@ -678,7 +725,14 @@ class Session(QObject):
         return any(c.id == clip_id for c in self.project.main)
 
     def _has(self, clip_id: str) -> bool:
-        return self._is_main(clip_id) or self.project.audio_clip(clip_id) is not None
+        return self._is_main(clip_id) or self.project.free_clip(clip_id) is not None
+
+    def _visual(self, clip_id: str) -> Clip | model.OverlayClip | None:
+        """Видеоклип основной дорожки или наложения — то, что можно двигать на холсте."""
+        if self._is_main(clip_id):
+            return self.project.main[self.project.index_of(clip_id)]
+        found = self.project.overlay_clip(clip_id)
+        return found[1] if found else None
 
     def _apply(self, project: Project, position: int | None = None) -> None:
         before = self._history.current
@@ -744,7 +798,9 @@ class Session(QObject):
         self._jobs[source] = job
         self._progress[source] = 0.0
         if job.output.exists():
-            job.start()  # готовый из кэша — без очереди, кодировать нечего
+            # Готовый из кэша — без очереди и сразу в граф; сигнал придёт позже, для миниатюр
+            self._proxies[source] = str(job.output)
+            job.start()
             return
         self._proxy_queue.append(job)
         self._next_proxy()
@@ -783,9 +839,10 @@ class Session(QObject):
         if self._closed:
             return
         self._proxy_done(source)
+        known = self._proxies.get(source) == proxy  # из кэша: граф уже собран с ним
         self._proxies[source] = proxy
         enforce_cache_limit(self._proxy_dir, keep={Path(p) for p in self._proxies.values()})
-        if self._builder is not None:
+        if self._builder is not None and not known:
             self._builder.forget(source)
             self._rebuild()
         if not self._jobs:

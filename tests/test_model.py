@@ -9,22 +9,24 @@ from chestor_motion.project.history import History
 from chestor_motion.project.model import (
     AudioClip,
     Clip,
+    OverlayClip,
     Project,
     add_audio,
     add_clip,
+    add_overlay,
     delete,
     detach_audio,
     fill_scale,
     frame_rect,
     move,
-    move_audio,
+    move_free,
     set_canvas,
     set_transform,
     split,
-    split_audio,
-    trim_audio_end,
-    trim_audio_start,
+    split_free,
     trim_end,
+    trim_free_end,
+    trim_free_start,
     trim_start,
 )
 
@@ -169,33 +171,33 @@ def test_audio_lanes_never_overlap() -> None:
 
 def test_move_audio_and_empty_lanes_vanish() -> None:
     p = add_audio(add_audio(Project(), _audio(0, 30, "a")), _audio(10, 30, "b"))
-    p = move_audio(p, "b", 100)  # в своей дорожке, дальше
+    p = move_free(p, "b", 100)  # в своей дорожке, дальше
     assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
-    p = move_audio(p, "b", 40, lane=0)  # в первую, там свободно
+    p = move_free(p, "b", 40, lane=0)  # в первую, там свободно
     assert [[c.id for c in lane] for lane in p.audio] == [["a", "b"]]
-    p = move_audio(p, "b", -50)  # не в минус; в 0 занято клипом a — новая дорожка
+    p = move_free(p, "b", -50)  # не в минус; в 0 занято клипом a — новая дорожка
     assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
     assert p.audio_clip("b")[1].start == 0  # type: ignore[index]
 
 
 def test_trim_audio_respects_neighbours() -> None:
     p = add_audio(add_audio(Project(), _audio(0, 30, "a")), _audio(40, 30, "b"))
-    p = trim_audio_end(p, "a", 500)  # упирается в b: конец a не дальше 40
+    p = trim_free_end(p, "a", 500)  # упирается в b: конец a не дальше 40
     assert p.audio_clip("a")[1].end == 40  # type: ignore[index]
-    p = trim_audio_start(p, "b", 20)  # левый край b едет вправо вместе с in
+    p = trim_free_start(p, "b", 20)  # левый край b едет вправо вместе с in
     b = p.audio_clip("b")[1]  # type: ignore[index]
     assert (b.in_frame, b.start, b.end) == (20, 60, 70)
-    p = trim_audio_start(p, "b", 0)  # назад — только до конца a и не в минус in
+    p = trim_free_start(p, "b", 0)  # назад — только до конца a и не в минус in
     b = p.audio_clip("b")[1]  # type: ignore[index]
     assert (b.in_frame, b.start) == (0, 40)
 
 
 def test_split_audio_and_delete() -> None:
     p = add_audio(Project(), _audio(10, 30, "a"))
-    p = split_audio(p, "a", 25)
+    p = split_free(p, "a", 25)
     left, right = p.audio[0]
     assert (left.start, left.end, right.start, right.in_frame, right.end) == (10, 25, 25, 15, 40)
-    assert split_audio(p, "a", 10) == p  # на краю — нечего резать
+    assert split_free(p, "a", 10) == p  # на краю — нечего резать
     p = delete(delete(p, left.id), right.id)
     assert p.audio == ()
 
@@ -225,9 +227,9 @@ def test_save_load_with_audio(tmp_path: Path) -> None:
 def test_move_audio_below_last_lane_makes_new_lane() -> None:
     p = add_audio(add_audio(Project(), _audio(0, 30, "a")), _audio(100, 30, "b"))
     assert len(p.audio) == 1
-    p = move_audio(p, "b", 100, lane=1)  # в первой дорожке место есть, но просили новую
+    p = move_free(p, "b", 100, lane=1)  # в первой дорожке место есть, но просили новую
     assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
-    p = move_audio(p, "b", 40, lane=0)  # обратно наверх — нижняя пустеет и исчезает
+    p = move_free(p, "b", 40, lane=0)  # обратно наверх — нижняя пустеет и исчезает
     assert [[c.id for c in lane] for lane in p.audio] == [["a", "b"]]
 
 
@@ -266,5 +268,42 @@ def test_v2_file_gets_default_transform(tmp_path: Path) -> None:
     for c in data["main"]:
         del c["x"], c["y"], c["scale"]
     path = tmp_path / "v2.cmproj"
+    path.write_text(json.dumps(data))
+    assert io.load(path) == _project(100)
+
+
+def test_overlays_lanes_order_and_edits(tmp_path: Path) -> None:
+    p = _project(100)
+    p = add_overlay(p, OverlayClip("o.mp4", 50, 0, 40, start=10, id="o1"))
+    p = add_overlay(p, OverlayClip("o.mp4", 50, 0, 40, start=20, id="o2"))  # пересекается — выше
+    assert [[c.id for c in lane] for lane in p.overlays] == [["o1"], ["o2"]]
+    # сверху вниз: верхняя дорожка наложений, нижняя, основная
+    assert [c.id for c in p.visible_at(25)] == ["o2", "o1", "c0"]
+    assert [c.id for c in p.visible_at(5)] == ["c0"]
+    assert p.length == 100 and add_overlay(p, OverlayClip("o.mp4", 50, 0, 50, 90)).length == 140
+
+    p = set_transform(p, "o2", 0.25, 0.25, 0.5)
+    assert p.overlay_clip("o2")[1].scale == 0.5  # type: ignore[index]
+    p = move_free(p, "o2", 60, 0)  # свободно в нижней — переехал туда, верхняя исчезла
+    assert len(p.overlays) == 1 and [c.id for c in p.overlays[0]] == ["o1", "o2"]
+    p = split_free(p, "o2", 70)
+    assert len(p.overlays[0]) == 3 and p.overlays[0][2].scale == 0.5
+    p = detach_audio(p, "o1")
+    assert not p.overlay_clip("o1")[1].audio and p.audio[0][0].start == 10  # type: ignore[index]
+    p = trim_free_end(p, "o1", 30)
+    assert p.overlay_clip("o1")[1].end == 40  # type: ignore[index]
+
+    path = tmp_path / "o.cmproj"
+    io.save(p, path)
+    assert io.load(path) == p
+    p = delete(p, "o1")
+    assert p.overlay_clip("o1") is None and len(p.overlays[0]) == 2
+
+
+def test_v3_file_gets_no_overlays(tmp_path: Path) -> None:
+    data = io.to_dict(_project(100))
+    data["version"] = 3
+    del data["overlay_tracks"]
+    path = tmp_path / "v3.cmproj"
     path.write_text(json.dumps(data))
     assert io.load(path) == _project(100)

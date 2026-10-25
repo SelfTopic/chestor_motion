@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 
-// Таймлайн: линейка, основная дорожка с клипами и плейхед.
+// Таймлайн: линейка, дорожки наложений, основная дорожка, звуковые дорожки и плейхед.
 // Правки мышью применяются к модели только при отпускании кнопки — граф MLT не пересобирается
 // на каждое движение. Пока тянешь, меняется только картинка.
 Rectangle {
@@ -14,11 +14,17 @@ Rectangle {
     readonly property color textDim: "#8a8a93"
     readonly property int pad: 16
     readonly property int rulerHeight: 26
-    readonly property int trackTop: rulerHeight + 10
-    readonly property int trackHeight: 84  // миниатюры + полоска звука
-    // Звуковые дорожки под основной
     readonly property int laneHeight: 44
     readonly property int laneStep: laneHeight + 6
+    // Наложения над основной: дорожка 0 — сразу над ней, верхняя — выше всех (как на картинке)
+    readonly property int overlayCount: session.overlayLanes.length
+    readonly property int overlaysTop: rulerHeight + 10
+    function overlayTop(lane) {
+        return overlaysTop + (overlayCount - 1 - lane) * laneStep
+    }
+    readonly property int trackTop: overlaysTop + overlayCount * laneStep + (overlayCount > 0 ? 4 : 0)
+    readonly property int trackHeight: 84  // миниатюры + полоска звука
+    // Звуковые дорожки под основной
     readonly property int laneCount: session.audioLanes.length
     readonly property int lanesTop: trackTop + trackHeight + 10
     function laneTop(lane) {
@@ -220,21 +226,33 @@ Rectangle {
             }
         }
 
-        // --- звуковые дорожки ---
+        // --- дорожки наложений и звуковые: подложки, потом клипы ---
         Repeater {
-            model: timeline.laneCount
+            model: timeline.overlayCount + timeline.laneCount
             delegate: Rectangle {
                 required property int index
+                readonly property bool isOverlay: index < timeline.overlayCount
                 x: 0
-                y: timeline.laneTop(index) - 2
+                y: (isOverlay ? timeline.overlayTop(index) : timeline.laneTop(index - timeline.overlayCount)) - 2
                 width: flick.contentWidth
                 height: timeline.laneHeight + 4
-                color: "#17171b"
+                color: isOverlay ? "#19171d" : "#17171b"
+            }
+        }
+        Repeater {
+            model: timeline.session.overlayClips
+            delegate: LaneClipItem {
+                required property var modelData
+                clipData: modelData
+                view: timeline
+                overlay: true
+                selected: timeline.session.selectedClip === modelData.id
+                thumbs: timeline.session.thumbs[modelData.source]
             }
         }
         Repeater {
             model: timeline.session.audioClips
-            delegate: AudioClipItem {
+            delegate: LaneClipItem {
                 required property var modelData
                 clipData: modelData
                 view: timeline

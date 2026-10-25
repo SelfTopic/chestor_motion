@@ -1,15 +1,18 @@
 import QtQuick
 import ChestorMotion
 
-// Клип звуковой дорожки: форма волны, имя, выделение, ручки подрезки. Тянется по времени и
-// между дорожками (ниже последней — новая дорожка). Правый клик — меню клипа.
+// Клип свободной дорожки: звук (форма волны) или наложение (миниатюры). Тянется по времени и
+// между дорожками своей группы; за крайнюю — новая дорожка. Правый клик — меню клипа.
+// Звуковые дорожки идут вниз от основной, наложения — вверх: у наложений «дальше» — выше.
 Item {
     id: item
 
     required property var clipData
     required property var view  // Timeline
+    property bool overlay: false
     property bool selected: false
     property var peaks
+    property var thumbs
 
     // Пока тянешь ручку (см. TrimHandles): левая двигает и начало клипа на таймлайне
     property int trimIn: 0
@@ -19,7 +22,8 @@ Item {
     readonly property real px: view.pxPerFrame
 
     x: view.xAt(clipData.start + trimIn) + (moveArea.dragging ? moveArea.dragX : 0)
-    y: view.laneTop(clipData.lane) + (moveArea.dragging ? moveArea.dragY : 0)
+    y: (overlay ? view.overlayTop(clipData.lane) : view.laneTop(clipData.lane))
+       + (moveArea.dragging ? moveArea.dragY : 0)
     width: Math.max(2, (outFrame - inFrame) * px)
     height: view.laneHeight
     z: moveArea.dragging ? 5 : (selected ? 2 : 1)
@@ -31,8 +35,16 @@ Item {
         anchors.leftMargin: 1
         anchors.rightMargin: 1
         radius: 6
-        color: "#14353a"
+        color: item.overlay ? "#2a2433" : "#14353a"
         clip: true
+
+        Thumbnails {
+            anchors.fill: parent
+            visible: item.overlay
+            thumbs: item.thumbs
+            inFrame: item.inFrame
+            px: item.px
+        }
 
         Waveform {
             readonly property real visibleFrom: Math.max(0, item.view.viewX - item.x)
@@ -40,21 +52,21 @@ Item {
             x: visibleFrom
             width: Math.max(0, visibleTo - visibleFrom)
             height: parent.height
-            visible: item.peaks !== undefined && width > 0
+            visible: !item.overlay && item.peaks !== undefined && width > 0
             peaks: item.peaks ?? new ArrayBuffer(0)
             firstFrame: item.inFrame + visibleFrom / item.px
             pxPerFrame: item.px
             color: "#22d3c5"
         }
 
-        // Имя — на тёмной плашке: поверх яркой волны иначе не читается
+        // Имя — на тёмной плашке: поверх яркой волны и миниатюр иначе не читается
         Rectangle {
             x: 5
             y: 4
             width: Math.min(nameText.implicitWidth + 10, parent.width - 10)
             height: nameText.implicitHeight + 2
             radius: 4
-            color: "#cc0f2226"
+            color: item.overlay ? "#cc1b1626" : "#cc0f2226"
             visible: width > 20
 
             Text {
@@ -62,8 +74,9 @@ Item {
                 x: 5
                 y: 1
                 width: parent.width - 10
-                text: "♪ " + item.clipData.name
-                color: "#e6fffb"
+                text: (item.overlay ? "▣ " : "♪ ") + item.clipData.name
+                      + (item.overlay && !item.clipData.audio ? " · без звука" : "")
+                color: item.overlay ? "#f0e8ff" : "#e6fffb"
                 font.pixelSize: 11
                 elide: Text.ElideRight
             }
@@ -74,7 +87,7 @@ Item {
             radius: body.radius
             color: "transparent"
             border.width: item.selected ? 2 : 1
-            border.color: item.selected ? "#ffffff" : "#24555c"
+            border.color: item.selected ? "#ffffff" : item.overlay ? "#5b4a78" : "#24555c"
         }
     }
 
@@ -96,7 +109,9 @@ Item {
             item.view.session.select(item.clipData.id)
             item.view.player.seek(item.clipData.start + Math.floor(mouse.x / item.px))
             if (mouse.button === Qt.RightButton)
-                item.view.openClipMenu(item.clipData.id, true, false, mapToItem(item.view, mouse.x, mouse.y))
+                item.view.openClipMenu(item.clipData.id, !item.overlay,
+                                       item.overlay && item.clipData.audio,
+                                       mapToItem(item.view, mouse.x, mouse.y))
         }
         onPositionChanged: (mouse) => {
             if (!pressed || pressedButtons !== Qt.LeftButton)
@@ -116,10 +131,11 @@ Item {
                 return
             const c = item.clipData
             const start = Math.max(0, c.start + Math.round(dragX / item.px))
-            const lane = Math.max(0, c.lane + Math.round(dragY / item.view.laneStep))
+            const steps = Math.round(dragY / item.view.laneStep)
+            const lane = Math.max(0, c.lane + (item.overlay ? -steps : steps))
             dragging = false
             // Последний вызов: сессия пересоздаёт клипы таймлайна
-            item.view.session.moveAudio(c.id, start, lane)
+            item.view.session.moveFree(c.id, start, lane)
         }
         onCanceled: dragging = false
         onWheel: (wheel) => item.view.wheelAt(wheel, mapToItem(item.view, wheel.x, wheel.y).x)

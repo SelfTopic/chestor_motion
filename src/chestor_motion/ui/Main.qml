@@ -79,7 +79,7 @@ ApplicationWindow {
           text: "Повторить", action: () => session.redo() },
 
         { group: "Превью", keys: [], label: "Клик по картинке",
-          text: "Выделить клип под плейхедом — появится рамка" },
+          text: "Выделить верхний клип под мышью (наложение или основной) — появится рамка" },
         { group: "Превью", keys: [], label: "Тянуть картинку",
           text: "Двигать клип по холсту; у центра прилипает" },
         { group: "Превью", keys: [], label: "Углы рамки",
@@ -97,6 +97,8 @@ ApplicationWindow {
           text: "Меню клипа: разрезать, отделить звук, удалить" },
         { group: "Таймлайн", keys: [], label: "Тянуть звук",
           text: "Звуковой клип — по времени и между дорожками; ниже последней — новая дорожка" },
+        { group: "Таймлайн", keys: [], label: "Тянуть наложение",
+          text: "По времени и между дорожками наложений; выше верхней — новая, она поверх всех" },
         { group: "Таймлайн", keys: [], label: "Белые ручки",
           text: "Подрезать начало или конец выделенного клипа" },
         { group: "Таймлайн", keys: [], label: "Клик по линейке",
@@ -109,6 +111,8 @@ ApplicationWindow {
         // Импорт — Ctrl+I, как в CapCut; Ctrl+O открывает проект
         { group: "Проект", keys: ["Ctrl+I"], label: "Ctrl+I",
           text: "Импорт видео и звука (или перетащи файлы в окно)", action: () => fileBrowser.openFor("media") },
+        { group: "Проект", keys: ["Ctrl+Shift+I"], label: "Ctrl+Shift+I",
+          text: "Наложение: видео поверх основного у плейхеда", action: () => fileBrowser.openFor("overlay") },
         { group: "Проект", keys: ["Ctrl+N"], label: "Ctrl+N",
           text: "Новый проект", action: () => session.newProject() },
         { group: "Проект", keys: ["Ctrl+O"], label: "Ctrl+O",
@@ -165,6 +169,8 @@ ApplicationWindow {
                 session.openProjectPath(paths[0])
             else if (mode === "folder")
                 exportPanel.folder = paths[0]
+            else if (mode === "overlay")
+                session.importOverlayPaths(paths)
             else
                 session.importPaths(paths)
         }
@@ -241,6 +247,34 @@ ApplicationWindow {
                     implicitHeight: 34
                     radius: 17
                     color: importButton.down ? Qt.darker(root.accent, 1.2) : root.accent
+                }
+            }
+
+            // Видео поверх основного у плейхеда; пока основной дорожки нет — нечего накладывать
+            Button {
+                id: overlayButton
+                objectName: "overlayButton"
+                text: "＋  Наложение"
+                enabled: player.hasMedia
+                opacity: enabled ? 1 : 0.4
+                onClicked: fileBrowser.openFor("overlay")
+                ToolTip.visible: hovered
+                ToolTip.text: "Видео поверх основного (Ctrl+Shift+I)"
+                ToolTip.delay: 400
+                contentItem: Text {
+                    text: overlayButton.text
+                    color: root.accent
+                    font.pixelSize: 14
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitWidth: 140
+                    implicitHeight: 34
+                    radius: 17
+                    color: overlayButton.down ? "#1d3533" : overlayButton.hovered ? "#16282a" : "transparent"
+                    border.color: root.accent
                 }
             }
 

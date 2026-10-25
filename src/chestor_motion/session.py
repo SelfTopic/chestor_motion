@@ -1,19 +1,24 @@
-"""Открытый проект: модель + история правок + превью.
+"""Открытый проект: модель + история правок + превью + файл проекта.
 
 После каждой правки граф MLT собирается заново из модели и подменяется в плеере. Пока для
 файла нет прокси, играет оригинал; прокси готов — сборщик подставляет его.
+
+Сохранять руками не нужно, как в CapCut: через AUTOSAVE_MS после правки проект пишется в свой
+файл. У нового проекта файл появляется при первой правке — черновик в data_dir/drafts.
 """
 
+import json
+from datetime import datetime
 from pathlib import Path
 
 import mlt7 as mlt
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.player import Player
 from chestor_motion.engine.proxy import ProxyJob, proxy_size
 from chestor_motion.engine.thumbs import ThumbJob
-from chestor_motion.project import model
+from chestor_motion.project import io, model
 from chestor_motion.project.history import History
 from chestor_motion.project.model import Clip, Project
 from chestor_motion.qt import qproperty
@@ -21,6 +26,11 @@ from chestor_motion.qt import qproperty
 # Превью собирается в уменьшенном профиле: в 1080×1920 MLT выдаёт ~39 кадров/с, в 540×960 ~46,
 # а в окне превью всё равно меньше 960 точек. Экспорт — в полном размере проекта.
 PREVIEW_MAX_SIDE = 960
+AUTOSAVE_MS = 1500
+
+
+def default_data_dir() -> Path:
+    return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
 
 
 def preview_size(width: int, height: int) -> tuple[int, int]:
@@ -33,13 +43,25 @@ class Session(QObject):
     selectionChanged = Signal()
     thumbsChanged = Signal()
     imported = Signal()
+    fileChanged = Signal()
 
     def __init__(
-        self, player: Player, cache_dir: Path | None = None, parent: QObject | None = None
+        self,
+        player: Player,
+        cache_dir: Path | None = None,
+        data_dir: Path | None = None,
+        parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._player = player
         self._cache_dir = cache_dir
+        self._data_dir = data_dir or default_data_dir()
+        self._path: Path | None = None
+        self._saved = Project()
+        self._autosave = QTimer(self)
+        self._autosave.setSingleShot(True)
+        self._autosave.setInterval(AUTOSAVE_MS)
+        self._autosave.timeout.connect(self.flush)
         self._history = History(Project())
         self._profile: mlt.Profile | None = None
         self._builder: Builder | None = None
@@ -56,10 +78,14 @@ class Session(QObject):
 
     # --- свойства для QML ---
 
-    @qproperty(str, notify=projectChanged)
+    @qproperty(str, notify=fileChanged)
     def title(self) -> str:
-        main = self._history.current.main
-        return Path(main[0].source).name if main else ""
+        """Имя проекта: имя файла без расширения, у нового — «Новый проект»."""
+        return self._path.stem if self._path else "Новый проект"
+
+    @qproperty(str, notify=fileChanged)
+    def projectPath(self) -> str:
+        return str(self._path) if self._path else ""
 
     @qproperty(str, notify=statusChanged)
     def status(self) -> str:
@@ -202,9 +228,84 @@ class Session(QObject):
         if self._history.redo():
             self._rebuild()
 
+    # --- файл проекта ---
+
+    @Slot()
+    def newProject(self) -> None:
+        self.flush()
+        self._set_project(Project(), None)
+
+    @Slot(QUrl)
+    def openProject(self, url: QUrl) -> None:
+        self.open_project(Path(url.toLocalFile()))
+
+    def open_project(self, path: Path) -> bool:
+        try:
+            project = io.load(path)
+        except (OSError, io.ProjectFormatError) as e:
+            self._set_status(f"Не удалось открыть проект: {e}")
+            return False
+        missing = sorted({Path(c.source).name for c in project.main if not Path(c.source).exists()})
+        if missing:
+            self._set_status("Нет исходных файлов: " + ", ".join(missing))
+            return False
+        self.flush()
+        self._set_project(project, path)
+        for source in dict.fromkeys(c.source for c in project.main):
+            info = probe(source)
+            self._start_proxy(source, info.width, info.height, info.length)
+        return True
+
+    @Slot()
+    def save(self) -> None:
+        """Ctrl+S: проект и так сохраняется сам — записать прямо сейчас и сказать куда."""
+        self.flush(force=True)
+        if self._path:
+            self._set_status(f"Сохранено: {self._path}")
+
+    @Slot(QUrl)
+    def saveAs(self, url: QUrl) -> None:
+        self.save_as(Path(url.toLocalFile()))
+
+    def save_as(self, path: Path) -> None:
+        if path.suffix != io.SUFFIX:
+            path = path.with_name(path.name + io.SUFFIX)
+        self._path = path
+        self.flush(force=True)
+        self.fileChanged.emit()
+        self._set_status(f"Сохранено: {path}")
+
+    def restore_last(self) -> bool:
+        """При запуске без файлов — открыть прошлый проект."""
+        try:
+            last = json.loads((self._data_dir / "state.json").read_text()).get("last", "")
+        except (OSError, ValueError, AttributeError):
+            return False
+        return bool(last) and Path(last).exists() and self.open_project(Path(last))
+
+    @Slot()
+    def flush(self, force: bool = False) -> None:
+        """Записать проект, если есть несохранённые правки (или force)."""
+        self._autosave.stop()
+        project = self.project
+        if project == self._saved and not force:
+            return
+        if not project.main and self._path is None:
+            return  # пустой новый проект черновиком не нужен
+        if self._path is None:
+            drafts = self._data_dir / "drafts"
+            drafts.mkdir(parents=True, exist_ok=True)
+            self._path = drafts / f"Черновик {datetime.now():%Y-%m-%d %H-%M-%S}{io.SUFFIX}"
+            self.fileChanged.emit()
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        io.save(project, self._path)
+        self._saved = project
+        self._remember(self._path)
+
     def close(self) -> None:
-        """Остановить фоновые задачи. Готовый позже прокси иначе пересоберёт граф и запустит
-        консьюмер на уже закрытом плеере."""
+        """Сохранить и остановить фоновые задачи. Готовый позже прокси иначе пересоберёт граф и
+        запустит консьюмер на уже закрытом плеере."""
+        self.flush()
         self._closed = True
         for job in [*self._jobs.values(), *self._thumb_jobs.values()]:
             job.cancel()
@@ -213,6 +314,22 @@ class Session(QObject):
         self._progress.clear()
 
     # --- внутреннее ---
+
+    def _set_project(self, project: Project, path: Path | None) -> None:
+        self._history = History(project)
+        self._saved = project
+        self._path = path
+        if path is not None:
+            self._remember(path)
+        self._selected = ""
+        self.selectionChanged.emit()
+        self.fileChanged.emit()
+        self._rebuild(position=0)
+        self.imported.emit()  # таймлайн подгоняет масштаб под весь проект
+
+    def _remember(self, path: Path) -> None:
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        (self._data_dir / "state.json").write_text(json.dumps({"last": str(path)}))
 
     def _has(self, clip_id: str) -> bool:
         return any(c.id == clip_id for c in self.project.main)
@@ -227,6 +344,8 @@ class Session(QObject):
         if self._closed:
             return
         project = self.project
+        if project != self._saved:
+            self._autosave.start()
         if not project.main:
             self._player.clear()
             if self._selected:

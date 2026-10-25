@@ -8,6 +8,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from chestor_motion.engine.player import Player
+from chestor_motion.project import io
 from chestor_motion.session import Session
 
 QML_DIR = Path(__file__).parent / "ui"
@@ -30,8 +31,15 @@ def main() -> int:
     if not engine.rootObjects():
         return 1
 
-    for arg in sys.argv[1:]:
-        session.import_path(Path(arg))
+    # Файл проекта — открыть, видео — импортировать в новый; без аргументов — прошлый проект
+    args = [Path(a) for a in sys.argv[1:]]
+    for arg in args:
+        if arg.suffix == io.SUFFIX:
+            session.open_project(arg)
+        else:
+            session.import_path(arg)
+    if not args:
+        session.restore_last()
 
     code = app.exec()
     # Сначала QML: иначе привязки успевают пересчитаться с уже удалёнными player и session

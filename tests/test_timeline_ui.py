@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt
 from PySide6.QtGui import QGuiApplication, QWheelEvent
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem, QQuickWindow
@@ -24,7 +24,9 @@ class Ui:
     def __init__(self, tmp_path: Path) -> None:
         os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
         self.player = Player(SILENT_AUDIO_OUT)
-        self.session = Session(self.player, cache_dir=tmp_path / "proxies")
+        self.session = Session(
+            self.player, cache_dir=tmp_path / "proxies", data_dir=tmp_path / "data"
+        )
         self.engine = QQmlApplicationEngine()
         self.warnings: list[str] = []
         self.engine.warnings.connect(lambda ws: self.warnings.extend(w.toString() for w in ws))
@@ -163,3 +165,19 @@ def test_scrollbar_appears_on_zoom_and_scrolls(ui: Ui) -> None:
     centre = handle.mapToScene(QPointF(handle.width() / 2, handle.height() / 2))
     ui.drag(centre.x(), centre.y(), centre.x() + 200)
     assert float(ui.flick.property("contentX")) > before + 100
+
+
+def test_project_menu(ui: Ui, tmp_path: Path) -> None:
+    ui.session.save_as(tmp_path / "menu.cmproj")
+    button = ui.win.findChild(QQuickItem, "projectButton")
+    assert button is not None
+    centre = button.mapToScene(QPointF(button.width() / 2, button.height() / 2))
+    ui.click(centre.x(), centre.y())
+    menu = ui.win.findChild(QObject, "projectMenu")
+    assert menu is not None and menu.property("visible")
+    QTest.keyClick(ui.win, Qt.Key.Key_Escape)
+    QTest.qWait(50)
+    assert not menu.property("visible")
+    QTest.keyClick(ui.win, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
+    QTest.qWait(50)
+    assert not ui.session.project.main and ui.session.title == "Новый проект"

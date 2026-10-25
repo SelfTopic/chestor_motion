@@ -29,7 +29,7 @@ ApplicationWindow {
     minimumWidth: 720
     minimumHeight: 480
     visible: true
-    title: session.title ? session.title + " — chestor_motion" : "chestor_motion"
+    title: session.title + " — chestor_motion"
     color: bg
 
     Shortcut { sequence: "Space"; onActivated: player.togglePlay() }
@@ -39,7 +39,12 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+Right"; onActivated: player.step(player.fps) }
     Shortcut { sequence: "Home"; onActivated: player.seek(0) }
     Shortcut { sequence: "End"; onActivated: player.seek(player.length - 1) }
-    Shortcut { sequences: [StandardKey.Open]; onActivated: fileDialog.open() }
+    // Импорт — Ctrl+I, как в CapCut; Ctrl+O открывает проект
+    Shortcut { sequence: "Ctrl+I"; onActivated: fileDialog.open() }
+    Shortcut { sequence: "Ctrl+N"; onActivated: session.newProject() }
+    Shortcut { sequence: "Ctrl+O"; onActivated: openProjectDialog.open() }
+    Shortcut { sequence: "Ctrl+S"; onActivated: session.save() }
+    Shortcut { sequence: "Ctrl+Shift+S"; onActivated: saveAsDialog.open() }
     Shortcut { sequence: "S"; onActivated: session.splitAtPlayhead() }
     Shortcut { sequences: [StandardKey.Delete, "Backspace"]; onActivated: session.deleteSelectedOrAtPlayhead() }
     Shortcut { sequence: "Escape"; onActivated: session.select("") }
@@ -54,6 +59,47 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Видео (*.mp4 *.mkv *.mov *.webm *.avi)", "Все файлы (*)"]
         onAccepted: session.importUrls(selectedFiles)
+    }
+
+    FileDialog {
+        id: openProjectDialog
+        title: "Открыть проект"
+        nameFilters: ["Проект chestor_motion (*.cmproj)"]
+        onAccepted: session.openProject(selectedFile)
+    }
+
+    FileDialog {
+        id: saveAsDialog
+        title: "Сохранить проект как"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "cmproj"
+        nameFilters: ["Проект chestor_motion (*.cmproj)"]
+        onAccepted: session.saveAs(selectedFile)
+    }
+
+    // Встроенный компонент не видит id файла (root) — цвета прямо здесь
+    component MenuEntry: MenuItem {
+        id: entry
+        property string shortcutText: ""
+        implicitWidth: 260
+        implicitHeight: 34
+        contentItem: RowLayout {
+            Text {
+                text: entry.text
+                color: "#f2f2f4"
+                font.pixelSize: 14
+                Layout.fillWidth: true
+            }
+            Text {
+                text: entry.shortcutText
+                color: "#8a8a93"
+                font.pixelSize: 12
+            }
+        }
+        background: Rectangle {
+            color: entry.highlighted ? "#2a2a33" : "transparent"
+            radius: 6
+        }
     }
 
     header: Rectangle {
@@ -86,13 +132,48 @@ ApplicationWindow {
                 }
             }
 
-            Text {
-                text: session.title
-                color: root.textMain
-                font.pixelSize: 14
-                elide: Text.ElideMiddle
-                Layout.fillWidth: true
+            // Меню проекта: имя проекта и есть кнопка, как в CapCut
+            Button {
+                id: projectButton
+                objectName: "projectButton"
+                Layout.maximumWidth: 420
+                onClicked: projectMenu.open()
+                ToolTip.visible: hovered && session.projectPath !== ""
+                ToolTip.text: session.projectPath
+                ToolTip.delay: 600
+                contentItem: Text {
+                    text: session.title + "  ▾"
+                    color: root.textMain
+                    font.pixelSize: 14
+                    elide: Text.ElideMiddle
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitHeight: 34
+                    radius: 8
+                    color: projectButton.down || projectMenu.visible ? "#2a2a33"
+                         : projectButton.hovered ? "#222228" : "transparent"
+                }
+
+                Menu {
+                    id: projectMenu
+                    objectName: "projectMenu"
+                    y: projectButton.height + 4
+                    padding: 6
+                    background: Rectangle {
+                        implicitWidth: 260
+                        color: root.panel
+                        border.color: "#2c2c33"
+                        radius: 10
+                    }
+                    MenuEntry { text: "Новый проект"; shortcutText: "Ctrl+N"; onTriggered: session.newProject() }
+                    MenuEntry { text: "Открыть…"; shortcutText: "Ctrl+O"; onTriggered: openProjectDialog.open() }
+                    MenuEntry { text: "Сохранить"; shortcutText: "Ctrl+S"; onTriggered: session.save() }
+                    MenuEntry { text: "Сохранить как…"; shortcutText: "Ctrl+Shift+S"; onTriggered: saveAsDialog.open() }
+                }
             }
+
+            Item { Layout.fillWidth: true }
 
             Text {
                 visible: session.status !== ""
@@ -138,7 +219,7 @@ ApplicationWindow {
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "или нажми «Импорт» (Ctrl+O)"
+                    text: "или нажми «Импорт» (Ctrl+I)"
                     color: root.textDim
                     font.pixelSize: 14
                 }

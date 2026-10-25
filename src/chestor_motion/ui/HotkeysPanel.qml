@@ -18,7 +18,7 @@ Popup {
 
     parent: Overlay.overlay
     anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 64 : 1200, 1200)
+    width: Math.min(parent ? parent.width - 64 : 980, 980)
     height: Math.min(parent ? parent.height - 64 : 640, content.implicitHeight + 2 * padding)
     modal: true
     focus: true
@@ -33,16 +33,67 @@ Popup {
         border.color: "#2c2c33"
     }
 
+    onOpened: scroller.forceActiveFocus()
+
+    // Затемнение у нижнего края, пока ниже есть ещё
+    Rectangle {
+        parent: panel.contentItem
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.rightMargin: vbar.visible ? 22 : 0
+        anchors.bottom: parent.bottom
+        height: 48
+        z: 2
+        visible: scroller.contentY + scroller.height < scroller.contentHeight - 2
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#001a1a1e" }
+            GradientStop { position: 1.0; color: "#ff1a1a1e" }
+        }
+    }
+
+    // Прокрутка: видимая полоса (в стиле Basic она прозрачна без наведения), затемнение у края,
+    // за которым есть ещё, и клавиши
     contentItem: Flickable {
         id: scroller
+        objectName: "hotkeysScroller"
         clip: true
+        focus: true
         contentHeight: content.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+        function scrollBy(dy) {
+            contentY = Math.max(0, Math.min(contentHeight - height, contentY + dy))
+        }
+        Keys.onUpPressed: scrollBy(-40)
+        Keys.onDownPressed: scrollBy(40)
+        Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_PageDown) scrollBy(height - 60)
+            else if (event.key === Qt.Key_PageUp) scrollBy(-(height - 60))
+            else if (event.key === Qt.Key_Home) contentY = 0
+            else if (event.key === Qt.Key_End) contentY = Math.max(0, contentHeight - height)
+            else return
+            event.accepted = true
+        }
+
+        ScrollBar.vertical: ScrollBar {
+            id: vbar
+            policy: scroller.contentHeight > scroller.height + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            width: 12
+            contentItem: Rectangle {
+                implicitWidth: 8
+                radius: width / 2
+                color: vbar.pressed ? "#22d3c5" : (vbar.hovered ? "#7a7a85" : "#55555f")
+            }
+            background: Rectangle {
+                implicitWidth: 8
+                radius: width / 2
+                color: "#202026"
+            }
+        }
 
         ColumnLayout {
             id: content
-            width: scroller.width
+            width: scroller.width - (vbar.visible ? 22 : 0)  // не залезать под полосу
             spacing: 18
 
             RowLayout {
@@ -55,17 +106,17 @@ Popup {
                     Layout.fillWidth: true
                 }
                 Text {
-                    text: "Esc — закрыть"
+                    text: "↑↓ PgUp PgDn — прокрутка · Esc — закрыть"
                     color: "#8a8a93"
                     font.pixelSize: 12
                 }
             }
 
-            // Группы в несколько колонок, когда хватает ширины: так всё видно без прокрутки
+            // Две просторные колонки; что не влезло по высоте — прокруткой
             GridLayout {
                 Layout.fillWidth: true
-                columns: content.width > 1050 ? 3 : content.width > 700 ? 2 : 1
-                columnSpacing: 28
+                columns: content.width > 700 ? 2 : 1
+                columnSpacing: 32
                 rowSpacing: 18
 
                 Repeater {
@@ -94,7 +145,7 @@ Popup {
 
                                 // Клавиша — «кнопкой», действие мышью — просто текстом
                                 Item {
-                                    Layout.preferredWidth: 128
+                                    Layout.preferredWidth: 140
                                     Layout.alignment: Qt.AlignTop
                                     implicitHeight: keyCap.implicitHeight
 

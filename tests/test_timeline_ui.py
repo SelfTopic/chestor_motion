@@ -295,3 +295,20 @@ def test_file_browser_escape_clears_search_then_closes(ui: Ui) -> None:
     QTest.keyClick(ui.win, Qt.Key.Key_Escape)
     QTest.qWait(300)
     assert not browser.property("visible")
+
+
+def test_hotkeys_panel_scrolls_with_keys(ui: Ui) -> None:
+    ui.win.resize(1000, 600)  # низкое окно — справка точно не влезает
+    QTest.qWait(50)
+    QTest.keyClick(ui.win, Qt.Key.Key_F1)
+    QTest.qWait(100)
+    scroller = ui.win.findChild(QQuickItem, "hotkeysScroller")
+    assert scroller is not None
+    assert float(scroller.property("contentHeight")) > scroller.height()
+    QTest.keyClick(ui.win, Qt.Key.Key_PageDown)
+    assert float(scroller.property("contentY")) > 0
+    QTest.keyClick(ui.win, Qt.Key.Key_End)
+    end = float(scroller.property("contentY"))
+    assert abs(end - (float(scroller.property("contentHeight")) - scroller.height())) < 1
+    QTest.keyClick(ui.win, Qt.Key.Key_Home)
+    assert float(scroller.property("contentY")) == 0

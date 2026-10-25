@@ -1,4 +1,8 @@
-"""Прокси: лёгкая копия клипа с постоянными 30 fps и частыми ключевыми кадрами.
+"""Прокси: лёгкая копия клипа с постоянными 30 fps, где каждый кадр ключевой.
+
+Каждый кадр ключевой — чтобы перемотка в любую сторону стоила одинаково дёшево: с GOP 15
+перетаскивание ползунка назад или быстро давало ~13 обновлений картинки в секунду, с intra ~30.
+Цена — размер, примерно втрое больше (40 с 1278×590 — 50 МБ), поэтому качество чуть ниже.
 
 Сначала кодирует видеокарта (VA-API), при ошибке — процессор (libx264).
 """
@@ -10,6 +14,8 @@ from PySide6.QtCore import QObject, QProcess, QStandardPaths, QTimer, Signal
 
 FPS = 30
 MAX_SIDE = 1280
+# Менять при смене параметров кодирования: старые прокси в кэше пересоздадутся
+FORMAT_VERSION = 2
 VAAPI_DEVICE = "/dev/dri/renderD128"
 
 
@@ -21,7 +27,7 @@ def proxy_size(width: int, height: int, max_side: int = MAX_SIDE) -> tuple[int, 
 
 def proxy_path(source: Path, cache_dir: Path) -> Path:
     stat = source.stat()
-    key = f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{MAX_SIDE}|{FPS}"
+    key = f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{MAX_SIDE}|{FPS}|v{FORMAT_VERSION}"
     return cache_dir / f"{hashlib.sha1(key.encode()).hexdigest()}.mp4"
 
 
@@ -32,11 +38,11 @@ def ffmpeg_args(source: Path, out: Path, size: tuple[int, int], *, vaapi: bool) 
         args += ["-hwaccel", "vaapi", "-hwaccel_device", VAAPI_DEVICE]
         args += ["-hwaccel_output_format", "vaapi", "-i", str(source)]
         args += ["-vf", f"fps={FPS},scale_vaapi=w={w}:h={h}:format=nv12"]
-        args += ["-c:v", "h264_vaapi", "-qp", "24"]
+        args += ["-c:v", "h264_vaapi", "-qp", "28"]
     else:
         args += ["-i", str(source), "-vf", f"fps={FPS},scale={w}:{h}", "-pix_fmt", "yuv420p"]
-        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
-    args += ["-g", "15", "-map", "0:v:0", "-map", "0:a:0?"]
+        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
+    args += ["-g", "1", "-map", "0:v:0", "-map", "0:a:0?"]
     args += ["-c:a", "aac", "-ar", "48000", "-ac", "2", str(out)]
     return args
 

@@ -51,6 +51,14 @@ def test_proxy_is_constant_30fps(qapp, clip: Path, tmp_path: Path) -> None:
     assert streams["video"]["avg_frame_rate"] == "30/1"
     assert (streams["video"]["width"], streams["video"]["height"]) == (642, 360)
     assert streams["audio"]["sample_rate"] == "48000"
+    key_frames = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "frame=key_frame",
+         "-of", "csv=p=0", str(path)],
+        check=True, capture_output=True, text=True,
+    ).stdout.split()  # fmt: skip
+    assert {k.strip(",") for k in key_frames} == {"1"}, (
+        "каждый кадр прокси должен быть ключевым — для перемотки"
+    )
     assert not list(tmp_path.glob("*.part.mp4"))
 
 

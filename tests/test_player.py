@@ -3,8 +3,19 @@ from pathlib import Path
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtMultimedia import QVideoSink
 
+from chestor_motion.engine.builder import Builder, make_profile
 from chestor_motion.engine.player import Player
+from chestor_motion.project.model import Clip, Project, add_clip
 from tests.conftest import SILENT_AUDIO_OUT
+
+
+def _show(player: Player, clip: Path, position: int | None = None) -> None:
+    """Показать один клип целиком, как сессия после импорта."""
+    profile = make_profile(642, 360)
+    builder = Builder(profile)
+    n = builder.source_length(str(clip))
+    project = add_clip(Project(width=642, height=360), Clip(str(clip), n, 0, n))
+    player.show(builder.build(project), profile, position)
 
 
 def _wait(ms: int) -> None:
@@ -16,7 +27,7 @@ def _wait(ms: int) -> None:
 def test_load_normalizes_to_30fps(qapp, clip: Path) -> None:
     player = Player(SILENT_AUDIO_OUT)
     try:
-        assert player.load(clip)
+        _show(player, clip)
         assert player.size == (642, 360)
         assert 58 <= player.length <= 62  # 2 с при 30 fps, а не при исходных ~60
     finally:
@@ -30,7 +41,7 @@ def test_frames_reach_sink_and_position_advances(qapp, clip: Path) -> None:
     sink.videoFrameChanged.connect(frames.append)
     player.set_video_sink(sink)
     try:
-        player.load(clip)
+        _show(player, clip)
         _wait(300)
         assert frames, "кадр на паузе должен прийти после load"
         assert frames[-1].size().width() == 642
@@ -47,19 +58,36 @@ def test_frames_reach_sink_and_position_advances(qapp, clip: Path) -> None:
         player.shutdown()
 
 
-def test_invalid_file(qapp, tmp_path: Path) -> None:
-    bad = tmp_path / "bad.mp4"
-    bad.write_bytes(b"not a video")
+def test_reshow_keeps_position_and_playback(qapp, clip: Path) -> None:
+    # Граф пересобирается после каждой правки — подмена не должна сбрасывать плеер
     player = Player(SILENT_AUDIO_OUT)
-    assert not player.load(bad)
+    try:
+        _show(player, clip, 30)
+        player.play()
+        _wait(200)
+        before = player.position
+        _show(player, clip)
+        assert player.playing
+        assert abs(player.position - before) <= 2
+    finally:
+        player.shutdown()
+
+
+def test_empty_playlist_has_no_media(qapp) -> None:
+    import mlt7 as mlt
+
+    player = Player(SILENT_AUDIO_OUT)
+    profile = make_profile(642, 360)
+    player.show(mlt.Playlist(profile), profile)
     assert not player.hasMedia
+    player.shutdown()
 
 
 def test_stop_while_playing_does_not_deadlock(qapp, clip: Path) -> None:
     # consumer.stop() из SWIG держал GIL, пока поток MLT ждал GIL в колбэке, и вис навсегда
     player = Player(SILENT_AUDIO_OUT)
     for _ in range(15):
-        player.load(clip)
+        _show(player, clip)
         player.play()
         _wait(40)
         player.shutdown()
@@ -70,7 +98,7 @@ def test_scrubbing_does_not_deadlock(qapp, clip: Path) -> None:
     # Перемотка на паузе шлёт refresh; SWIG-вызов держал GIL, пока ждал мьютекс консьюмера,
     # а консьюмер держал мьютекс и ждал GIL в колбэке — окно зависало при таскании ползунка
     player = Player(SILENT_AUDIO_OUT)
-    player.load(clip)
+    _show(player, clip)
     try:
         for i in range(20_000):
             player.seek(i * 7 % player.length)
@@ -86,7 +114,7 @@ def test_picture_follows_scrubber_on_pause(qapp, clip: Path) -> None:
     player = Player(SILENT_AUDIO_OUT)
     shown: list[int] = []
     player._frameShown.connect(lambda _frame, pos: shown.append(pos))
-    player.load(clip, 0)
+    _show(player, clip, 0)
     target = {"pos": 0}
 
     def tick() -> None:
@@ -110,7 +138,7 @@ def test_picture_follows_fast_backward_scrub(qapp, clip: Path) -> None:
     player = Player(SILENT_AUDIO_OUT)
     shown: list[int] = []
     player._frameShown.connect(lambda _frame, pos: shown.append(pos))
-    player.load(clip, player.length - 1 if player.length else 59)
+    _show(player, clip, player.length - 1 if player.length else 59)
     target = {"pos": 59, "moves": 0}
 
     def tick() -> None:

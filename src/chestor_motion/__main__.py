@@ -30,8 +30,8 @@ def main() -> int:
     if not engine.rootObjects():
         return 1
 
-    if len(sys.argv) > 1:
-        session.open_path(Path(sys.argv[1]))
+    for arg in sys.argv[1:]:
+        session.import_path(Path(arg))
 
     code = app.exec()
     player.shutdown()

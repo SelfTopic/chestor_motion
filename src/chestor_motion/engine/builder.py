@@ -5,6 +5,7 @@
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import mlt7 as mlt
 
@@ -23,6 +24,22 @@ def make_profile(width: int, height: int) -> mlt.Profile:
     profile.set_progressive(1)
     profile.set_explicit(1)
     return profile
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    width: int
+    height: int
+    length: int  # в кадрах проекта
+
+
+def probe(path: str) -> SourceInfo:
+    """Размер и длина исходника. Длина — в кадрах проекта, а не в родных кадрах файла."""
+    profile = make_profile(2, 2)  # живёт дольше источника: тот ссылается на профиль
+    producer = mlt.Producer(profile, path)
+    if not producer.is_valid():
+        raise OSError(f"MLT не открывает {path}")
+    return SourceInfo(producer.get_int("width"), producer.get_int("height"), producer.get_length())
 
 
 class Builder:

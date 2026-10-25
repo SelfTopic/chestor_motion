@@ -1,4 +1,6 @@
+import faulthandler
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -12,6 +14,8 @@ QML_DIR = Path(__file__).parent / "ui"
 
 
 def main() -> int:
+    # Зависло окно — `kill -USR1 <pid>` печатает стеки Python всех потоков в терминал
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     # Свой тёмный дизайн: стиль Basic, а не системный стиль KDE
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     app = QGuiApplication(sys.argv)

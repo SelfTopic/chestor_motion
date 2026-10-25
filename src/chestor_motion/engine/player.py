@@ -1,8 +1,6 @@
 """Плеер на MLT: воспроизведение, звук и синхронизацию делает консьюмер sdl2_audio,
 мы только забираем показанный кадр и отдаём его в QVideoSink (масштабирует видеокарта)."""
 
-from pathlib import Path
-
 import mlt7 as mlt
 from PySide6.QtCore import Property, QObject, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat, QVideoSink
@@ -13,10 +11,6 @@ from chestor_motion.qt import qproperty
 FPS = 30
 # Если кадр после перемотки так и не пришёл (например, тот же самый кадр), не ждём вечно
 SEEK_TIMEOUT_MS = 250
-
-
-def _even(n: int) -> int:
-    return max(2, n - n % 2)
 
 
 def _to_video_frame(rgba: bytes, w: int, h: int) -> QVideoFrame:
@@ -99,7 +93,7 @@ class Player(QObject):
 
     @qproperty(bool, notify=mediaChanged)
     def hasMedia(self) -> bool:
-        return self._producer is not None
+        return self._producer is not None and self._length > 0
 
     @qproperty(int, constant=True)
     def fps(self) -> int:
@@ -115,51 +109,60 @@ class Player(QObject):
 
     # --- управление ---
 
-    def load(self, path: Path, position: int = 0) -> bool:
-        """Открывает файл в профиле с постоянными 30 fps и размером самого файла."""
+    def show(
+        self, producer: mlt.Producer, profile: mlt.Profile, position: int | None = None
+    ) -> None:
+        """Показать собранный граф. Позиция и воспроизведение сохраняются, если не задана новая.
+
+        Граф пересобирается после каждой правки, поэтому подмена должна быть дешёвой: консьюмер
+        пересоздаётся только при смене профиля, иначе — остановка, подключение, запуск.
+        """
         was_playing = self._playing
+        keep = self._position if position is None else position
+        if self._profile is not profile:
+            self._close()
+            self._profile = profile
+            self._open_consumer(profile)
+        elif self._consumer_ptr:
+            mltlib.consumer_stop(self._consumer_ptr)
+        assert self._consumer is not None
+        # Консьюмер остановлен — можно трогать через SWIG
+        self._consumer.connect(producer)
+        self._producer = producer
+        self._producer_ptr = int(producer.get_producer())
+        self._width, self._height = profile.width(), profile.height()
+        self._length = producer.get_length()
+        self._seek_timeout.stop()
+        self._seek_in_flight = self._seek_queued = None
+        self._position = max(0, min(keep, self._length - 1))
+        mltlib.producer_set_speed(self._producer_ptr, 0)
+        mltlib.producer_seek(self._producer_ptr, self._position)
+        mltlib.consumer_start(self._consumer_ptr)
+        self.mediaChanged.emit()
+        self.positionChanged.emit()
+        self._playing = False
+        if was_playing and self._length > 0:
+            self.play()
+        else:
+            self._refresh()
+            self.playingChanged.emit()
+
+    def clear(self) -> None:
         self._close()
+        self.mediaChanged.emit()
 
-        probe_profile = mlt.Profile()
-        probe = mlt.Producer(probe_profile, str(path))
-        if not probe.is_valid():
-            return False
-        probe_profile.from_producer(probe)
-
-        profile = mlt.Profile()
-        profile.set_width(_even(probe_profile.width()))
-        profile.set_height(_even(probe_profile.height()))
-        profile.set_sample_aspect(1, 1)
-        profile.set_display_aspect(profile.width(), profile.height())
-        profile.set_frame_rate(FPS, 1)
-        profile.set_progressive(1)
-
-        producer = mlt.Producer(profile, str(path))
+    def _open_consumer(self, profile: mlt.Profile) -> None:
         consumer = mlt.Consumer(profile, self._audio_out)
         consumer.set("terminate_on_pause", 0)
         consumer.set("real_time", 1)
         # Без звука на паузе: иначе буфер упреждения забивается копиями одного кадра со звуком
         # и он звучит петлёй (после перемотки на паузе и в конце ролика)
         consumer.set("scrub_audio", 0)
-        consumer.connect(producer)
-
-        self._profile, self._producer, self._consumer = profile, producer, consumer
-        self._producer_ptr = int(producer.get_producer())
+        self._consumer = consumer
         self._consumer_ptr = int(consumer.get_consumer())
-        self._width, self._height = profile.width(), profile.height()
-        self._length = producer.get_length()
         self._subscription = mltlib.Subscription(
             self._consumer_ptr, "consumer-frame-show", self._on_mlt_frame
         )
-        mltlib.producer_set_speed(self._producer_ptr, 0)
-        mltlib.producer_seek(self._producer_ptr, min(position, self._length - 1))
-        mltlib.consumer_start(self._consumer_ptr)
-        self.mediaChanged.emit()
-        if was_playing:
-            self.play()
-        else:
-            self._refresh()
-        return True
 
     @Slot()
     def play(self) -> None:

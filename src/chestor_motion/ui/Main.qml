@@ -40,12 +40,19 @@ ApplicationWindow {
     Shortcut { sequence: "Home"; onActivated: player.seek(0) }
     Shortcut { sequence: "End"; onActivated: player.seek(player.length - 1) }
     Shortcut { sequences: [StandardKey.Open]; onActivated: fileDialog.open() }
+    Shortcut { sequence: "S"; onActivated: session.splitAtPlayhead() }
+    Shortcut { sequences: [StandardKey.Delete, "Backspace"]; onActivated: session.deleteAtPlayhead() }
+    Shortcut { sequence: "Ctrl+Z"; onActivated: session.undo() }
+    // Явно, а не StandardKey.Redo: в KDE он уже Ctrl+Shift+Z, и дубль делает сочетание
+    // неоднозначным — тогда Qt не вызывает ни один из ярлыков
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; onActivated: session.redo() }
 
     FileDialog {
         id: fileDialog
         title: "Импорт видео"
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["Видео (*.mp4 *.mkv *.mov *.webm *.avi)", "Все файлы (*)"]
-        onAccepted: session.open(selectedFile)
+        onAccepted: session.importUrls(selectedFiles)
     }
 
     header: Rectangle {
@@ -150,7 +157,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 onDropped: (event) => {
                     if (event.hasUrls)
-                        session.open(event.urls[0])
+                        session.importUrls(event.urls)
                 }
             }
         }

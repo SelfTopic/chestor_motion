@@ -390,3 +390,35 @@ def test_right_click_menu_offers_detach_only_with_own_sound(ui: Ui) -> None:
     )
     QTest.qWait(100)
     assert menu.property("visible") and not menu.property("hasOwnSound")
+
+
+def test_export_from_panel(ui: Ui, tmp_path: Path) -> None:
+    panel = ui.win.findChild(QObject, "exportPanel")
+    assert panel is not None
+    QTest.keyClick(ui.win, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier)
+    QTest.qWait(100)
+    assert panel.property("visible") and panel.property("exportState") == "idle"
+    summary = panel.findChild(QObject, "exportSummary")
+    assert summary is not None and "×" in summary.property("text")
+
+    out = tmp_path / "exports"
+    out.mkdir()
+    panel.setProperty("folder", str(out))
+    panel.setProperty("shortSide", 720)
+    name = panel.findChild(QObject, "exportName")
+    assert name is not None
+    name.setProperty("text", "мой ролик")
+    start = panel.findChild(QQuickItem, "exportStart")
+    assert start is not None
+    centre = start.mapToScene(QPointF(start.width() / 2, start.height() / 2))
+    ui.click(centre.x(), centre.y())
+    assert ui.session.exportState == "running"
+
+    for _ in range(300):
+        QTest.qWait(100)
+        if ui.session.exportState != "running":
+            break
+    assert ui.session.exportState == "done", ui.session.exportError
+    assert (out / "мой ролик.mp4").exists()
+    assert ui.session.exportDefaults["folder"] == str(out)  # запомнилось
+    assert ui.session.exportDefaults["shortSide"] == 720

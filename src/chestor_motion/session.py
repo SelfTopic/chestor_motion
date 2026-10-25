@@ -14,6 +14,13 @@ import mlt7 as mlt
 from PySide6.QtCore import QByteArray, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 from chestor_motion.engine.builder import Builder, make_profile, probe
+from chestor_motion.engine.export import (
+    ExportJob,
+    ExportSettings,
+    bitrate,
+    export_size,
+    unique_path,
+)
 from chestor_motion.engine.player import Player
 from chestor_motion.engine.proxy import (
     ProxyJob,
@@ -26,7 +33,7 @@ from chestor_motion.engine.thumbs import ThumbJob
 from chestor_motion.engine.waves import WaveJob
 from chestor_motion.project import io, model
 from chestor_motion.project.history import History
-from chestor_motion.project.model import Clip, Project
+from chestor_motion.project.model import FPS, Clip, Project
 from chestor_motion.project.state import State
 from chestor_motion.qt import qproperty
 
@@ -52,6 +59,7 @@ class Session(QObject):
     wavesChanged = Signal()
     imported = Signal()
     fileChanged = Signal()
+    exportChanged = Signal()
 
     def __init__(
         self,
@@ -93,6 +101,11 @@ class Session(QObject):
         self._selected = ""
         self._status = ""
         self._closed = False
+        self._export: ExportJob | None = None
+        self._export_state = "idle"  # idle / running / done / failed
+        self._export_progress = 0.0
+        self._export_path = ""
+        self._export_error = ""
 
     # --- свойства для QML ---
 
@@ -345,6 +358,99 @@ class Session(QObject):
         if self._history.redo():
             self._rebuild()
 
+    # --- экспорт ---
+
+    @qproperty(str, notify=exportChanged)
+    def exportState(self) -> str:
+        return self._export_state
+
+    @qproperty(float, notify=exportChanged)
+    def exportProgress(self) -> float:
+        return self._export_progress
+
+    @qproperty(str, notify=exportChanged)
+    def exportPath(self) -> str:
+        return self._export_path
+
+    @qproperty(str, notify=exportChanged)
+    def exportError(self) -> str:
+        return self._export_error
+
+    @qproperty(dict, notify=exportChanged)
+    def exportDefaults(self) -> dict:
+        """Последние настройки и папка экспорта; имя — по проекту."""
+        saved = self._state.get("export", {})
+        movies = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
+        folder = saved.get("folder", movies)
+        return {
+            "shortSide": saved.get("shortSide", 1080),
+            "fps": saved.get("fps", 30),
+            "quality": saved.get("quality", "high"),
+            "folder": folder if Path(folder).is_dir() else movies,
+            "name": self.title,
+        }
+
+    @Slot(int, int, str, result=str)
+    def exportSummary(self, short_side: int, fps: int, quality: str) -> str:
+        """«2340×1080 · ≈ 45 МБ» — что получится с такими настройками."""
+        project = self.project
+        size = export_size(project.width, project.height, short_side)
+        settings = ExportSettings(short_side, fps, quality)
+        mb = bitrate(size, settings) * project.length / FPS / 8 / 1_000_000
+        return f"{size[0]}×{size[1]} · ≈ {max(1, round(mb))} МБ"
+
+    @Slot(int, int, str, str, str)
+    def startExport(self, short_side: int, fps: int, quality: str, folder: str, name: str) -> None:
+        if self._export is not None or not (self.project.main or self.project.audio):
+            return
+        self.flush()
+        name = name.strip() or self.title
+        output = unique_path(Path(folder) / f"{name}.mp4")
+        self._state.set(
+            "export", {"shortSide": short_side, "fps": fps, "quality": quality, "folder": folder}
+        )
+        job = ExportJob(self.project, ExportSettings(short_side, fps, quality), output, parent=self)
+        job.progress.connect(self._on_export_progress)
+        job.finished.connect(self._on_export_done)
+        job.failed.connect(self._on_export_failed)
+        self._export = job
+        self._set_export("running", 0.0, str(output), "")
+        try:
+            job.start()
+        except OSError as e:
+            self._export = None
+            self._set_export("failed", 0.0, "", str(e))
+
+    @Slot()
+    def cancelExport(self) -> None:
+        """Отменить идущий экспорт или сбросить «Готово»/ошибку — в обоих случаях снова idle."""
+        if self._export is not None:
+            self._export.cancel()
+            self._export = None
+        if self._export_state != "idle":
+            self._set_export("idle", 0.0, "", "")
+
+    @Slot(str, result=str)
+    def folderUrl(self, path: str) -> str:
+        return QUrl.fromLocalFile(str(Path(path).parent)).toString()
+
+    def _set_export(self, state: str, progress: float, path: str, error: str) -> None:
+        self._export_state, self._export_progress = state, progress
+        self._export_path, self._export_error = path, error
+        self.exportChanged.emit()
+
+    def _on_export_progress(self, progress: float) -> None:
+        self._export_progress = progress
+        self.exportChanged.emit()
+
+    def _on_export_done(self, path: str) -> None:
+        self._export = None
+        self._set_export("done", 1.0, path, "")
+
+    def _on_export_failed(self, error: str) -> None:
+        self._export = None
+        self._set_export("failed", 0.0, "", error)
+
     # --- файл проекта ---
 
     @Slot()
@@ -431,6 +537,7 @@ class Session(QObject):
         запустит консьюмер на уже закрытом плеере."""
         self.flush()
         self._closed = True
+        self.cancelExport()
         for job in [*self._jobs.values(), *self._thumb_jobs.values(), *self._wave_jobs.values()]:
             job.cancel()
         self._jobs.clear()

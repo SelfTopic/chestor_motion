@@ -3,7 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Своё окно выбора файлов: быстрые места, недавние папки, поиск по имени (Ctrl+F).
-// mode: "media" — импорт видео (можно несколько), "project" — открыть проект.
+// mode: "media" — импорт видео и звука (можно несколько), "project" — открыть проект,
+// "folder" — выбрать папку (для экспорта).
 Popup {
     id: panel
 
@@ -27,12 +28,12 @@ Popup {
     readonly property color textMain: "#f2f2f4"
     readonly property color textDim: "#8a8a93"
 
-    function openFor(newMode) {
+    function openFor(newMode, startFolder) {
         mode = newMode
         search.text = ""
         selected = []
         const places = files.places
-        let start = lastFolder[newMode]
+        let start = startFolder || lastFolder[newMode]
         if (!start) {
             const recent = places.find(p => p.kind === "recent")
             const drafts = places.find(p => p.title === "Черновики")
@@ -91,7 +92,7 @@ Popup {
     function finish(paths) {
         if (paths.length === 0)
             return
-        const from = files.parentDir(paths[0])
+        const from = mode === "folder" ? paths[0] : files.parentDir(paths[0])
         files.remember(from)
         lastFolder[mode] = searching ? folder : from
         close()
@@ -185,7 +186,8 @@ Popup {
             spacing: 12
 
             Text {
-                text: panel.mode === "project" ? "Открыть проект" : "Импорт видео и звука"
+                text: panel.mode === "project" ? "Открыть проект"
+                    : panel.mode === "folder" ? "Куда сохранить" : "Импорт видео и звука"
                 color: panel.textMain
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
@@ -460,7 +462,8 @@ Popup {
                         visible: panel.entries.length === 0
                         text: panel.busy ? "Ищу…"
                             : panel.searching ? "Ничего не нашлось"
-                            : panel.mode === "project" ? "Здесь нет проектов" : "Здесь нет видео и звука"
+                            : panel.mode === "project" ? "Здесь нет проектов"
+                            : panel.mode === "folder" ? "Здесь нет вложенных папок" : "Здесь нет видео и звука"
                         color: panel.textDim
                         font.pixelSize: 13
                     }
@@ -476,6 +479,7 @@ Popup {
             Text {
                 text: panel.mode === "media"
                       ? "Ctrl/Shift+клик — несколько файлов · двойной клик или Enter — " + "импорт"
+                      : panel.mode === "folder" ? "Двойной клик — войти в папку"
                       : "Двойной клик или Enter — открыть"
                 color: panel.textDim
                 font.pixelSize: 12
@@ -504,10 +508,11 @@ Popup {
             Button {
                 id: okButton
                 objectName: "fileOk"
-                enabled: panel.selected.length > 0
-                onClicked: panel.finish(panel.selected)
+                enabled: panel.mode === "folder" ? !panel.searching : panel.selected.length > 0
+                onClicked: panel.finish(panel.mode === "folder" ? [panel.folder] : panel.selected)
                 contentItem: Text {
                     text: panel.mode === "project" ? "Открыть"
+                        : panel.mode === "folder" ? "Выбрать эту папку"
                         : panel.selected.length > 1 ? "Импортировать (" + panel.selected.length + ")"
                         : "Импортировать"
                     color: "#0f0f11"
@@ -517,7 +522,7 @@ Popup {
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
-                    implicitWidth: 150
+                    implicitWidth: 170
                     implicitHeight: 36
                     radius: 18
                     color: okButton.enabled ? (okButton.down ? Qt.darker(panel.accent, 1.2) : panel.accent) : "#2a2a33"

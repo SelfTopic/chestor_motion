@@ -14,15 +14,16 @@ from chestor_motion.engine import mltlib
 from chestor_motion.project.model import FPS, Project
 
 
-def make_profile(width: int, height: int) -> mlt.Profile:
+def make_profile(width: int, height: int, fps: int = FPS) -> mlt.Profile:
     mltlib.init()
     profile = mlt.Profile()
     profile.set_width(width - width % 2)
     profile.set_height(height - height % 2)
     profile.set_sample_aspect(1, 1)
     profile.set_display_aspect(profile.width(), profile.height())
-    profile.set_frame_rate(FPS, 1)
+    profile.set_frame_rate(fps, 1)
     profile.set_progressive(1)
+    profile.set_colorspace(709)  # HD; по умолчанию MLT пишет 601 (старое ТВ) — цвета съезжают
     profile.set_explicit(1)
     return profile
 
@@ -58,11 +59,16 @@ AV, VIDEO_ONLY, AUDIO_ONLY = "av", "video", "audio"
 
 
 class Builder:
-    def __init__(self, profile: mlt.Profile, resolve: Callable[[str], str] = str) -> None:
+    def __init__(
+        self, profile: mlt.Profile, resolve: Callable[[str], str] = str, scale: int = 1
+    ) -> None:
         """resolve: путь к оригиналу → путь, который реально открыть (прокси для превью).
-        Звуковые клипы открываются из оригинала: прокси им не нужен (у mp3 его и нет)."""
+        Звуковые клипы открываются из оригинала: прокси им не нужен (у mp3 его и нет).
+        scale: во сколько раз частота профиля выше FPS модели (экспорт в 60 fps — 2): все
+        позиции модели умножаются на него."""
         self._profile = profile
         self._resolve = resolve
+        self._k = scale
         self._cache: dict[tuple[str, str], mlt.Producer] = {}
 
     def producer(self, source: str, kind: str = AV) -> mlt.Producer:
@@ -93,13 +99,14 @@ class Builder:
         """Дорожка 0 — основная, дальше звуковые; переходы mix складывают звук всех дорожек."""
         tractor = mlt.Tractor(self._profile)
         main = mlt.Playlist(self._profile)
+        k = self._k
         for clip in project.main:
             producer = self.producer(clip.source, AV if clip.audio else VIDEO_ONLY)
             # У прокси и оригинала длина может отличаться на пару кадров (переменная
             # частота кадров оригинала) — не выходим за конец того, что открыто
-            last = min(clip.out_frame, producer.get_length()) - 1
+            last = min(clip.out_frame * k, producer.get_length()) - 1
             # В MLT out включительный, в модели — нет
-            main.append(producer, clip.in_frame, max(clip.in_frame, last))
+            main.append(producer, clip.in_frame * k, max(clip.in_frame * k, last))
         tractor.set_track(main, 0)
         keep: list[object] = [main]
 
@@ -107,12 +114,12 @@ class Builder:
             playlist = mlt.Playlist(self._profile)
             position = 0
             for clip in lane:
-                if clip.start > position:
-                    playlist.blank(clip.start - position - 1)  # blank(out): длина out + 1
+                if clip.start * k > position:
+                    playlist.blank(clip.start * k - position - 1)  # blank(out): длина out + 1
                 producer = self.producer(clip.source, AUDIO_ONLY)
-                last = min(clip.out_frame, producer.get_length()) - 1
-                playlist.append(producer, clip.in_frame, max(clip.in_frame, last))
-                position = clip.end
+                last = min(clip.out_frame * k, producer.get_length()) - 1
+                playlist.append(producer, clip.in_frame * k, max(clip.in_frame * k, last))
+                position = clip.end * k
             playlist.set("hide", 1)  # у звуковой дорожки нет картинки — видна основная
             tractor.set_track(playlist, index)
             mix = mlt.Transition(self._profile, "mix")

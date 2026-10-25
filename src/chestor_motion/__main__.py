@@ -11,6 +11,7 @@ from chestor_motion.engine.player import Player
 from chestor_motion.files import FileBrowser
 from chestor_motion.project import io
 from chestor_motion.session import Session
+from chestor_motion.ui_items import register_qml_types
 
 QML_DIR = Path(__file__).parent / "ui"
 
@@ -21,6 +22,7 @@ def main() -> int:
     # Свой тёмный дизайн: стиль Basic, а не системный стиль KDE
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     app = QGuiApplication(sys.argv)
+    register_qml_types()
     app.setApplicationName("chestor_motion")
     app.setOrganizationName("chestor_motion")
 

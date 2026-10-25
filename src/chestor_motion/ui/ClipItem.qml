@@ -1,4 +1,5 @@
 import QtQuick
+import ChestorMotion
 
 // Клип на основной дорожке: миниатюры, выделение, ручки подрезки, перетаскивание.
 Item {
@@ -8,6 +9,8 @@ Item {
     required property var view  // Timeline
     property bool selected: false
     property var thumbs  // сетка миниатюр исходника или undefined, пока не готова
+    property var peaks  // пики громкости исходника (байт на кадр) или undefined
+    readonly property int waveHeight: 22
 
     signal dragStateChanged(bool active)
 
@@ -33,28 +36,56 @@ Item {
         clip: true
 
         // Миниатюры: тайлы шириной tileWidth, у каждого — кадр исходника под его серединой
-        Repeater {
-            model: item.thumbs ? Math.ceil(body.width / item.thumbs.tileWidth) : 0
-            delegate: Item {
-                required property int index
-                readonly property int frame: item.inFrame
-                    + (index + 0.5) * item.thumbs.tileWidth / item.px
-                readonly property int tile: Math.max(0, Math.min(item.thumbs.count - 1,
-                    Math.floor(frame / item.thumbs.interval)))
-                x: index * item.thumbs.tileWidth
-                width: item.thumbs.tileWidth
-                height: body.height
-                clip: true
+        Item {
+            id: thumbArea
+            width: body.width
+            height: body.height - item.waveHeight
+            clip: true
 
-                Image {
-                    source: item.thumbs.url
-                    x: -(parent.tile % item.thumbs.columns) * item.thumbs.tileWidth
-                    y: -Math.floor(parent.tile / item.thumbs.columns) * item.thumbs.tileHeight
-                       + (body.height - item.thumbs.tileHeight) / 2
-                    asynchronous: true
-                    cache: true
-                    smooth: false
+            Repeater {
+                model: item.thumbs ? Math.ceil(body.width / item.thumbs.tileWidth) : 0
+                delegate: Item {
+                    required property int index
+                    readonly property int frame: item.inFrame
+                        + (index + 0.5) * item.thumbs.tileWidth / item.px
+                    readonly property int tile: Math.max(0, Math.min(item.thumbs.count - 1,
+                        Math.floor(frame / item.thumbs.interval)))
+                    x: index * item.thumbs.tileWidth
+                    width: item.thumbs.tileWidth
+                    height: thumbArea.height
+                    clip: true
+
+                    Image {
+                        source: item.thumbs.url
+                        x: -(parent.tile % item.thumbs.columns) * item.thumbs.tileWidth
+                        y: -Math.floor(parent.tile / item.thumbs.columns) * item.thumbs.tileHeight
+                           + (thumbArea.height - item.thumbs.tileHeight) / 2
+                        asynchronous: true
+                        cache: true
+                        smooth: false
+                    }
                 }
+            }
+        }
+
+        // Звук: полоска под миниатюрами. Рисуется только видимая часть клипа
+        Rectangle {
+            y: thumbArea.height
+            width: body.width
+            height: item.waveHeight
+            color: "#16262a"
+
+            Waveform {
+                readonly property real visibleFrom: Math.max(0, item.view.viewX - item.x)
+                readonly property real visibleTo: Math.min(item.width, item.view.viewX + item.view.viewWidth - item.x)
+                x: visibleFrom
+                width: Math.max(0, visibleTo - visibleFrom)
+                height: parent.height
+                visible: item.peaks !== undefined && width > 0
+                peaks: item.peaks ?? new ArrayBuffer(0)
+                firstFrame: item.inFrame + visibleFrom / item.px
+                pxPerFrame: item.px
+                color: "#22d3c5"
             }
         }
 

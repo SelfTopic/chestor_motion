@@ -16,6 +16,7 @@ from chestor_motion.__main__ import QML_DIR
 from chestor_motion.engine.player import Player
 from chestor_motion.files import FileBrowser
 from chestor_motion.session import Session
+from chestor_motion.ui_items import register_qml_types
 from tests.conftest import SILENT_AUDIO_OUT
 
 L = Qt.MouseButton.LeftButton
@@ -29,6 +30,7 @@ class Ui:
         self.session = Session(
             self.player, cache_dir=tmp_path / "proxies", data_dir=tmp_path / "data"
         )
+        register_qml_types()
         self.engine = QQmlApplicationEngine()
         self.warnings: list[str] = []
         self.engine.warnings.connect(lambda ws: self.warnings.extend(w.toString() for w in ws))

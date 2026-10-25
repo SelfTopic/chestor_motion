@@ -15,7 +15,7 @@ Rectangle {
     readonly property int pad: 16
     readonly property int rulerHeight: 26
     readonly property int trackTop: rulerHeight + 10
-    readonly property int trackHeight: 64
+    readonly property int trackHeight: 84  // миниатюры + полоска звука
 
     // Масштаб: точек на кадр. Ctrl+колесо меняет его вокруг курсора.
     property real pxPerFrame: 1
@@ -23,6 +23,9 @@ Rectangle {
     readonly property real maxPx: 24
     // Пока масштаб не меняли руками, таймлайн показывает весь проект целиком
     property bool userZoomed: false
+    // Видимая часть таймлайна в его координатах: клип рисует звук только в ней
+    readonly property real viewX: flick.contentX
+    readonly property real viewWidth: flick.width
 
     function frameAt(x) {
         return Math.max(0, Math.min(player.length - 1, Math.round((x - pad) / pxPerFrame)))
@@ -203,6 +206,7 @@ Rectangle {
                 height: timeline.trackHeight
                 selected: timeline.session.selectedClip === modelData.id
                 thumbs: timeline.session.thumbs[modelData.source]
+                peaks: timeline.session.waves[modelData.source]
                 onDragStateChanged: (active) => dragging.active = active
             }
         }

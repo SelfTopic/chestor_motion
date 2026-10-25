@@ -247,3 +247,18 @@ def test_proxies_encode_one_at_a_time(qapp, clip: Path, tmp_path: Path) -> None:
     finally:
         session.close()
         player.shutdown()
+
+
+def test_waves_for_imported_clip(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        loop = QEventLoop()
+        session.wavesChanged.connect(loop.quit)
+        QTimer.singleShot(20_000, loop.quit)
+        loop.exec()
+        peaks = session.waves[str(clip.resolve())]
+        assert peaks.size() == len(bytes(peaks.data())) and peaks.size() >= 58
+    finally:
+        session.close()
+        player.shutdown()

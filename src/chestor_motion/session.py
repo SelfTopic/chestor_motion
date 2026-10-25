@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import mlt7 as mlt
-from PySide6.QtCore import QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QByteArray, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.player import Player
@@ -23,6 +23,7 @@ from chestor_motion.engine.proxy import (
 )
 from chestor_motion.engine.proxy import default_cache_dir as default_proxy_dir
 from chestor_motion.engine.thumbs import ThumbJob
+from chestor_motion.engine.waves import WaveJob
 from chestor_motion.project import io, model
 from chestor_motion.project.history import History
 from chestor_motion.project.model import Clip, Project
@@ -48,6 +49,7 @@ class Session(QObject):
     projectChanged = Signal()
     selectionChanged = Signal()
     thumbsChanged = Signal()
+    wavesChanged = Signal()
     imported = Signal()
     fileChanged = Signal()
 
@@ -85,6 +87,9 @@ class Session(QObject):
         self._lengths: dict[str, int] = {}
         self._thumb_jobs: dict[str, ThumbJob] = {}
         self._thumbs: dict[str, dict] = {}
+        self._wave_jobs: dict[str, WaveJob] = {}
+        # QByteArray, а не bytes: байты Python внутри словаря доходят до QML обёрткой
+        self._waves: dict[str, QByteArray] = {}
         self._selected = ""
         self._status = ""
         self._closed = False
@@ -155,6 +160,11 @@ class Session(QObject):
         """Сетки миниатюр по пути к исходнику (см. ThumbJob.info)."""
         return self._thumbs
 
+    @qproperty(dict, notify=wavesChanged)
+    def waves(self) -> dict:
+        """Пики громкости по пути к исходнику: байт на кадр (см. engine/waves.py)."""
+        return self._waves
+
     @property
     def data_dir(self) -> Path:
         return self._data_dir
@@ -196,6 +206,7 @@ class Session(QObject):
         self._apply(model.add_clip(project, clip), position=project.length)
         self.imported.emit()
         self._start_proxy(source, info.width, info.height, info.length)
+        self._start_wave(source)
 
     # --- правки ---
 
@@ -284,6 +295,7 @@ class Session(QObject):
         for source in dict.fromkeys(c.source for c in project.main):
             info = probe(source)
             self._start_proxy(source, info.width, info.height, info.length)
+            self._start_wave(source)
         return True
 
     @Slot()
@@ -338,12 +350,13 @@ class Session(QObject):
         запустит консьюмер на уже закрытом плеере."""
         self.flush()
         self._closed = True
-        for job in [*self._jobs.values(), *self._thumb_jobs.values()]:
+        for job in [*self._jobs.values(), *self._thumb_jobs.values(), *self._wave_jobs.values()]:
             job.cancel()
         self._jobs.clear()
         self._proxy_queue.clear()
         self._proxy_running = None
         self._thumb_jobs.clear()
+        self._wave_jobs.clear()
         self._progress.clear()
 
     # --- внутреннее ---
@@ -485,6 +498,26 @@ class Session(QObject):
         self._thumb_jobs.pop(source, None)
         self._thumbs = {**self._thumbs, source: info}
         self.thumbsChanged.emit()
+
+    def _start_wave(self, source: str) -> None:
+        if source in self._waves or source in self._wave_jobs:
+            return
+        job = WaveJob(
+            Path(source),
+            cache_dir=self._cache_dir.parent / "waves" if self._cache_dir else None,
+            parent=self,
+        )
+        job.finished.connect(lambda peaks: self._on_wave_ready(source, peaks))
+        job.failed.connect(lambda _e: self._wave_jobs.pop(source, None))  # нет звука — нет волны
+        self._wave_jobs[source] = job
+        job.start()
+
+    def _on_wave_ready(self, source: str, peaks: bytes) -> None:
+        if self._closed:
+            return
+        self._wave_jobs.pop(source, None)
+        self._waves = {**self._waves, source: QByteArray(peaks)}
+        self.wavesChanged.emit()
 
     def _on_proxy_failed(self, source: str, error: str) -> None:
         self._proxy_done(source)

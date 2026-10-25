@@ -34,6 +34,9 @@ def main() -> int:
         session.import_path(Path(arg))
 
     code = app.exec()
+    # Сначала QML: иначе привязки успевают пересчитаться с уже удалёнными player и session
+    del engine
+    session.close()
     player.shutdown()
     return code
 

@@ -46,6 +46,7 @@ class Player(QObject):
         super().__init__(parent)
         mltlib.init()
         self._audio_out = audio_out
+        self._shut_down = False
         self._profile: mlt.Profile | None = None
         self._producer: mlt.Producer | None = None
         self._consumer: mlt.Consumer | None = None
@@ -117,6 +118,9 @@ class Player(QObject):
         Граф пересобирается после каждой правки, поэтому подмена должна быть дешёвой: консьюмер
         пересоздаётся только при смене профиля, иначе — остановка, подключение, запуск.
         """
+        if self._shut_down:
+            # Закрытый плеер не оживает: второй консьюмер sdl2_audio в процессе роняет его
+            return
         was_playing = self._playing
         keep = self._position if position is None else position
         if self._profile is not profile:
@@ -205,6 +209,8 @@ class Player(QObject):
         self.seek(self._position + frames)
 
     def shutdown(self) -> None:
+        """Окончательно: после этого show() ничего не делает."""
+        self._shut_down = True
         self._close()
 
     # --- внутреннее ---

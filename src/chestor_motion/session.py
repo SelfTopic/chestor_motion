@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QUrl, Signal, Slot
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.player import Player
 from chestor_motion.engine.proxy import ProxyJob, proxy_size
+from chestor_motion.engine.thumbs import ThumbJob
 from chestor_motion.project import model
 from chestor_motion.project.history import History
 from chestor_motion.project.model import Clip, Project
@@ -29,6 +30,9 @@ def preview_size(width: int, height: int) -> tuple[int, int]:
 class Session(QObject):
     statusChanged = Signal()
     projectChanged = Signal()
+    selectionChanged = Signal()
+    thumbsChanged = Signal()
+    imported = Signal()
 
     def __init__(
         self, player: Player, cache_dir: Path | None = None, parent: QObject | None = None
@@ -42,7 +46,13 @@ class Session(QObject):
         self._proxies: dict[str, str] = {}
         self._jobs: dict[str, ProxyJob] = {}
         self._progress: dict[str, float] = {}
+        self._proxy_sizes: dict[str, tuple[int, int]] = {}
+        self._lengths: dict[str, int] = {}
+        self._thumb_jobs: dict[str, ThumbJob] = {}
+        self._thumbs: dict[str, dict] = {}
+        self._selected = ""
         self._status = ""
+        self._closed = False
 
     # --- свойства для QML ---
 
@@ -69,6 +79,34 @@ class Session(QObject):
     @qproperty(bool, notify=projectChanged)
     def canRedo(self) -> bool:
         return self._history.can_redo
+
+    @qproperty(list, notify=projectChanged)
+    def clips(self) -> list:
+        """Клипы основной дорожки для таймлайна: позиции уже посчитаны."""
+        out, start = [], 0
+        for c in self.project.main:
+            out.append(
+                {
+                    "id": c.id,
+                    "source": c.source,
+                    "start": start,
+                    "length": c.length,
+                    "inFrame": c.in_frame,
+                    "outFrame": c.out_frame,
+                    "sourceLength": c.source_length,
+                }
+            )
+            start += c.length
+        return out
+
+    @qproperty(str, notify=selectionChanged)
+    def selectedClip(self) -> str:
+        return self._selected
+
+    @qproperty(dict, notify=thumbsChanged)
+    def thumbs(self) -> dict:
+        """Сетки миниатюр по пути к исходнику (см. ThumbJob.info)."""
+        return self._thumbs
 
     @property
     def project(self) -> Project:
@@ -100,6 +138,7 @@ class Session(QObject):
             )
         clip = Clip(source=source, source_length=info.length, in_frame=0, out_frame=info.length)
         self._apply(model.add_clip(project, clip), position=project.length)
+        self.imported.emit()
         self._start_proxy(source, info.width, info.height, info.length)
 
     # --- правки ---
@@ -116,6 +155,44 @@ class Session(QObject):
             self._apply(model.delete(self.project, self.project.main[index].id), position=start)
 
     @Slot()
+    def deleteSelectedOrAtPlayhead(self) -> None:
+        """Delete: выделенный клип, а если ничего не выделено — клип под плейхедом."""
+        if not self._has(self._selected):
+            self.deleteAtPlayhead()
+            return
+        index = self.project.index_of(self._selected)
+        start = self.project.clip_start(index)
+        self._apply(model.delete(self.project, self._selected), position=start)
+
+    @Slot(str)
+    def select(self, clip_id: str) -> None:
+        if clip_id != self._selected:
+            self._selected = clip_id
+            self.selectionChanged.emit()
+
+    @Slot(str, int)
+    def trimStart(self, clip_id: str, in_frame: int) -> None:
+        if self._has(clip_id):
+            index = self.project.index_of(clip_id)
+            # Начало клипа на таймлайне не двигается — плейхед ставим на него
+            start = self.project.clip_start(index)
+            self._apply(model.trim_start(self.project, clip_id, in_frame), position=start)
+
+    @Slot(str, int)
+    def trimEnd(self, clip_id: str, out_frame: int) -> None:
+        if self._has(clip_id):
+            project = model.trim_end(self.project, clip_id, out_frame)
+            index = project.index_of(clip_id)
+            end = project.clip_start(index) + project.main[index].length - 1
+            self._apply(project, position=end)
+
+    @Slot(str, int)
+    def moveClip(self, clip_id: str, to_index: int) -> None:
+        if self._has(clip_id):
+            project = model.move(self.project, clip_id, to_index)
+            self._apply(project, position=project.clip_start(project.index_of(clip_id)))
+
+    @Slot()
     def undo(self) -> None:
         if self._history.undo():
             self._rebuild()
@@ -125,7 +202,20 @@ class Session(QObject):
         if self._history.redo():
             self._rebuild()
 
+    def close(self) -> None:
+        """Остановить фоновые задачи. Готовый позже прокси иначе пересоберёт граф и запустит
+        консьюмер на уже закрытом плеере."""
+        self._closed = True
+        for job in [*self._jobs.values(), *self._thumb_jobs.values()]:
+            job.cancel()
+        self._jobs.clear()
+        self._thumb_jobs.clear()
+        self._progress.clear()
+
     # --- внутреннее ---
+
+    def _has(self, clip_id: str) -> bool:
+        return any(c.id == clip_id for c in self.project.main)
 
     def _apply(self, project: Project, position: int | None = None) -> None:
         before = self._history.current
@@ -134,9 +224,14 @@ class Session(QObject):
             self._rebuild(position)
 
     def _rebuild(self, position: int | None = None) -> None:
+        if self._closed:
+            return
         project = self.project
         if not project.main:
             self._player.clear()
+            if self._selected:
+                self._selected = ""
+                self.selectionChanged.emit()
             self.projectChanged.emit()
             return
         size = preview_size(project.width, project.height)
@@ -145,14 +240,19 @@ class Session(QObject):
             self._builder = Builder(self._profile, resolve=lambda s: self._proxies.get(s, s))
         assert self._builder is not None
         self._player.show(self._builder.build(project), self._profile, position)
+        if self._selected and not self._has(self._selected):
+            self._selected = ""
+            self.selectionChanged.emit()
         self.projectChanged.emit()
 
     def _start_proxy(self, source: str, width: int, height: int, length: int) -> None:
         if source in self._proxies or source in self._jobs:
             return
+        self._proxy_sizes[source] = proxy_size(width, height)
+        self._lengths[source] = length
         job = ProxyJob(
             Path(source),
-            proxy_size(width, height),
+            self._proxy_sizes[source],
             length / model.FPS,
             cache_dir=self._cache_dir,
             parent=self,
@@ -171,6 +271,8 @@ class Session(QObject):
             self.statusChanged.emit()
 
     def _on_proxy_ready(self, source: str, proxy: str) -> None:
+        if self._closed:
+            return
         self._jobs.pop(source, None)
         self._progress.pop(source, None)
         self._proxies[source] = proxy
@@ -178,6 +280,29 @@ class Session(QObject):
             self._builder.forget(source)
             self._rebuild()
         self._set_status("" if self._jobs else "Прокси")
+        self._start_thumbs(source, proxy)
+
+    def _start_thumbs(self, source: str, proxy: str) -> None:
+        if source in self._thumbs or source in self._thumb_jobs:
+            return
+        job = ThumbJob(
+            Path(proxy),
+            self._proxy_sizes[source],
+            self._lengths[source],
+            cache_dir=self._cache_dir.parent / "thumbs" if self._cache_dir else None,
+            parent=self,
+        )
+        job.finished.connect(lambda info: self._on_thumbs_ready(source, info))
+        job.failed.connect(lambda _e: self._thumb_jobs.pop(source, None))
+        self._thumb_jobs[source] = job
+        job.start()
+
+    def _on_thumbs_ready(self, source: str, info: dict) -> None:
+        if self._closed:
+            return
+        self._thumb_jobs.pop(source, None)
+        self._thumbs = {**self._thumbs, source: info}
+        self.thumbsChanged.emit()
 
     def _on_proxy_failed(self, source: str, error: str) -> None:
         self._jobs.pop(source, None)

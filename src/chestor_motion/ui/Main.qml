@@ -41,7 +41,8 @@ ApplicationWindow {
     Shortcut { sequence: "End"; onActivated: player.seek(player.length - 1) }
     Shortcut { sequences: [StandardKey.Open]; onActivated: fileDialog.open() }
     Shortcut { sequence: "S"; onActivated: session.splitAtPlayhead() }
-    Shortcut { sequences: [StandardKey.Delete, "Backspace"]; onActivated: session.deleteAtPlayhead() }
+    Shortcut { sequences: [StandardKey.Delete, "Backspace"]; onActivated: session.deleteSelectedOrAtPlayhead() }
+    Shortcut { sequence: "Escape"; onActivated: session.select("") }
     Shortcut { sequence: "Ctrl+Z"; onActivated: session.undo() }
     // Явно, а не StandardKey.Redo: в KDE он уже Ctrl+Shift+Z, и дубль делает сочетание
     // неоднозначным — тогда Qt не вызывает ни один из ярлыков
@@ -193,39 +194,14 @@ ApplicationWindow {
                 font.family: "monospace"
             }
 
-            Slider {
-                id: scrubber
-                Layout.fillWidth: true
-                from: 0
-                to: Math.max(1, player.length - 1)
-                stepSize: 1
-                value: player.position
-                onMoved: player.seek(Math.round(value))
+            Item { Layout.fillWidth: true }
+        }
 
-                background: Rectangle {
-                    x: scrubber.leftPadding
-                    y: scrubber.topPadding + scrubber.availableHeight / 2 - height / 2
-                    width: scrubber.availableWidth
-                    height: 4
-                    radius: 2
-                    color: "#2c2c33"
-
-                    Rectangle {
-                        width: scrubber.visualPosition * parent.width
-                        height: parent.height
-                        radius: 2
-                        color: root.accent
-                    }
-                }
-                handle: Rectangle {
-                    x: scrubber.leftPadding + scrubber.visualPosition * (scrubber.availableWidth - width)
-                    y: scrubber.topPadding + scrubber.availableHeight / 2 - height / 2
-                    width: 14
-                    height: 14
-                    radius: 7
-                    color: root.textMain
-                }
-            }
+        Timeline {
+            objectName: "timeline"
+            Layout.fillWidth: true
+            player: root.player
+            session: root.session
         }
     }
 }

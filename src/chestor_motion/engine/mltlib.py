@@ -29,6 +29,7 @@ _lib.mlt_frame_get_image.argtypes = [
 ]
 _lib.mlt_frame_get_position.restype = ctypes.c_int
 _lib.mlt_frame_get_position.argtypes = [ctypes.c_void_p]
+_lib.mlt_consumer_stop.argtypes = [ctypes.c_void_p]
 
 _initialized = False
 
@@ -54,6 +55,15 @@ class Subscription:
         if self._event:
             _lib.mlt_event_close(self._event)
             self._event = None
+
+
+def consumer_stop(consumer_ptr: int) -> None:
+    """Останавливает консьюмер, отпустив GIL.
+
+    SWIG-шный `Consumer.stop()` ждёт поток MLT, держа GIL, а этот поток может как раз ждать GIL
+    в нашем колбэке — взаимная блокировка. ctypes на время C-вызова GIL отпускает.
+    """
+    _lib.mlt_consumer_stop(consumer_ptr)
 
 
 def frame_position(frame_ptr: int) -> int:

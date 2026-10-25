@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Тесты не должны звучать из колонок и занимать звуковое устройство
+os.environ["SDL_AUDIODRIVER"] = "dummy"
+SILENT_AUDIO_OUT = "sdl2_audio"
 
 
 @pytest.fixture(scope="session")

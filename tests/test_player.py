@@ -4,6 +4,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtMultimedia import QVideoSink
 
 from chestor_motion.engine.player import Player
+from tests.conftest import SILENT_AUDIO_OUT
 
 
 def _wait(ms: int) -> None:
@@ -13,7 +14,7 @@ def _wait(ms: int) -> None:
 
 
 def test_load_normalizes_to_30fps(qapp, clip: Path) -> None:
-    player = Player()
+    player = Player(SILENT_AUDIO_OUT)
     try:
         assert player.load(clip)
         assert player.size == (642, 360)
@@ -23,7 +24,7 @@ def test_load_normalizes_to_30fps(qapp, clip: Path) -> None:
 
 
 def test_frames_reach_sink_and_position_advances(qapp, clip: Path) -> None:
-    player = Player()
+    player = Player(SILENT_AUDIO_OUT)
     sink = QVideoSink()
     frames = []
     sink.videoFrameChanged.connect(frames.append)
@@ -49,6 +50,17 @@ def test_frames_reach_sink_and_position_advances(qapp, clip: Path) -> None:
 def test_invalid_file(qapp, tmp_path: Path) -> None:
     bad = tmp_path / "bad.mp4"
     bad.write_bytes(b"not a video")
-    player = Player()
+    player = Player(SILENT_AUDIO_OUT)
     assert not player.load(bad)
     assert not player.hasMedia
+
+
+def test_stop_while_playing_does_not_deadlock(qapp, clip: Path) -> None:
+    # consumer.stop() из SWIG держал GIL, пока поток MLT ждал GIL в колбэке, и вис навсегда
+    player = Player(SILENT_AUDIO_OUT)
+    for _ in range(15):
+        player.load(clip)
+        player.play()
+        _wait(40)
+        player.shutdown()
+    assert not player.playing

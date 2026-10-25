@@ -42,9 +42,11 @@ class Player(QObject):
     playingChanged = Signal()
     videoSinkChanged = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, audio_out: str = "rtaudio", parent: QObject | None = None) -> None:
+        """audio_out — консьюмер MLT, который выводит звук и задаёт темп воспроизведения."""
         super().__init__(parent)
         mltlib.init()
+        self._audio_out = audio_out
         self._profile: mlt.Profile | None = None
         self._producer: mlt.Producer | None = None
         self._consumer: mlt.Consumer | None = None
@@ -115,7 +117,7 @@ class Player(QObject):
         profile.set_progressive(1)
 
         producer = mlt.Producer(profile, str(path))
-        consumer = mlt.Consumer(profile, "rtaudio")
+        consumer = mlt.Consumer(profile, self._audio_out)
         consumer.set("terminate_on_pause", 0)
         consumer.set("real_time", 1)
         consumer.set("scrub_audio", 1)
@@ -196,7 +198,7 @@ class Player(QObject):
 
     def _close(self) -> None:
         if self._consumer is not None:
-            self._consumer.stop()
+            mltlib.consumer_stop(int(self._consumer.get_consumer()))
         if self._subscription is not None:
             self._subscription.close()
         # Порядок важен: консьюмер ссылается на источник, оба — на профиль

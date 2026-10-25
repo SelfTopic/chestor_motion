@@ -32,26 +32,84 @@ ApplicationWindow {
     title: session.title + " — chestor_motion"
     color: bg
 
-    Shortcut { sequence: "Space"; onActivated: player.togglePlay() }
-    Shortcut { sequence: "Left"; onActivated: player.step(-1) }
-    Shortcut { sequence: "Right"; onActivated: player.step(1) }
-    Shortcut { sequence: "Shift+Left"; onActivated: player.step(-player.fps) }
-    Shortcut { sequence: "Shift+Right"; onActivated: player.step(player.fps) }
-    Shortcut { sequence: "Home"; onActivated: player.seek(0) }
-    Shortcut { sequence: "End"; onActivated: player.seek(player.length - 1) }
-    // Импорт — Ctrl+I, как в CapCut; Ctrl+O открывает проект
-    Shortcut { sequence: "Ctrl+I"; onActivated: fileDialog.open() }
-    Shortcut { sequence: "Ctrl+N"; onActivated: session.newProject() }
-    Shortcut { sequence: "Ctrl+O"; onActivated: openProjectDialog.open() }
-    Shortcut { sequence: "Ctrl+S"; onActivated: session.save() }
-    Shortcut { sequence: "Ctrl+Shift+S"; onActivated: saveAsDialog.open() }
-    Shortcut { sequence: "S"; onActivated: session.splitAtPlayhead() }
-    Shortcut { sequences: [StandardKey.Delete, "Backspace"]; onActivated: session.deleteSelectedOrAtPlayhead() }
-    Shortcut { sequence: "Escape"; onActivated: session.select("") }
-    Shortcut { sequence: "Ctrl+Z"; onActivated: session.undo() }
-    // Явно, а не StandardKey.Redo: в KDE он уже Ctrl+Shift+Z, и дубль делает сочетание
-    // неоднозначным — тогда Qt не вызывает ни один из ярлыков
-    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; onActivated: session.redo() }
+    // Все клавиши и действия мышью — один список: из него создаются горячие клавиши и
+    // панель справки (F1), так справка не разъезжается с тем, что работает на самом деле.
+    // keys пустой — действие мышью, только для справки.
+    readonly property var hotkeys: [
+        { group: "Воспроизведение", keys: ["Space"], label: "Пробел",
+          text: "Воспроизвести / пауза", action: () => player.togglePlay() },
+        { group: "Воспроизведение", keys: ["Left"], label: "←",
+          text: "На кадр назад", action: () => player.step(-1) },
+        { group: "Воспроизведение", keys: ["Right"], label: "→",
+          text: "На кадр вперёд", action: () => player.step(1) },
+        { group: "Воспроизведение", keys: ["Shift+Left"], label: "Shift+←",
+          text: "На секунду назад", action: () => player.step(-player.fps) },
+        { group: "Воспроизведение", keys: ["Shift+Right"], label: "Shift+→",
+          text: "На секунду вперёд", action: () => player.step(player.fps) },
+        { group: "Воспроизведение", keys: ["Home"], label: "Home",
+          text: "В начало", action: () => player.seek(0) },
+        { group: "Воспроизведение", keys: ["End"], label: "End",
+          text: "В конец", action: () => player.seek(player.length - 1) },
+
+        { group: "Монтаж", keys: ["S"], label: "S",
+          text: "Разрезать клип под плейхедом", action: () => session.splitAtPlayhead() },
+        { group: "Монтаж", keys: ["Delete", "Backspace"], label: "Delete",
+          text: "Удалить выделенный клип, а если ничего не выделено — клип под плейхедом",
+          action: () => session.deleteSelectedOrAtPlayhead() },
+        { group: "Монтаж", keys: ["Escape"], label: "Esc",
+          text: "Снять выделение", action: () => session.select("") },
+        { group: "Монтаж", keys: ["Ctrl+Z"], label: "Ctrl+Z",
+          text: "Отменить", action: () => session.undo() },
+        // Явно, а не StandardKey.Redo: в KDE он уже Ctrl+Shift+Z, и дубль делает сочетание
+        // неоднозначным — тогда Qt не вызывает ни один из ярлыков
+        { group: "Монтаж", keys: ["Ctrl+Shift+Z", "Ctrl+Y"], label: "Ctrl+Shift+Z",
+          text: "Повторить", action: () => session.redo() },
+
+        { group: "Таймлайн", keys: [], label: "Клик по клипу",
+          text: "Выделить клип и перемотать в это место" },
+        { group: "Таймлайн", keys: [], label: "Тянуть клип",
+          text: "Переставить клип, остальные сдвинутся встык" },
+        { group: "Таймлайн", keys: [], label: "Белые ручки",
+          text: "Подрезать начало или конец выделенного клипа" },
+        { group: "Таймлайн", keys: [], label: "Клик по линейке",
+          text: "Перемотать; головку плейхеда можно тянуть" },
+        { group: "Таймлайн", keys: [], label: "Ctrl+колесо",
+          text: "Масштаб вокруг курсора" },
+        { group: "Таймлайн", keys: [], label: "Колесо",
+          text: "Прокрутка; при увеличении снизу есть ползунок" },
+
+        // Импорт — Ctrl+I, как в CapCut; Ctrl+O открывает проект
+        { group: "Проект", keys: ["Ctrl+I"], label: "Ctrl+I",
+          text: "Импорт видео (или перетащи файлы в окно)", action: () => fileDialog.open() },
+        { group: "Проект", keys: ["Ctrl+N"], label: "Ctrl+N",
+          text: "Новый проект", action: () => session.newProject() },
+        { group: "Проект", keys: ["Ctrl+O"], label: "Ctrl+O",
+          text: "Открыть проект", action: () => openProjectDialog.open() },
+        { group: "Проект", keys: ["Ctrl+S"], label: "Ctrl+S",
+          text: "Сохранить сейчас (и так сохраняется само)", action: () => session.save() },
+        { group: "Проект", keys: ["Ctrl+Shift+S"], label: "Ctrl+Shift+S",
+          text: "Сохранить как…", action: () => saveAsDialog.open() },
+        { group: "Проект", keys: ["F1"], label: "F1",
+          text: "Эта справка", action: () => hotkeysPanel.visible ? hotkeysPanel.close() : hotkeysPanel.open() },
+    ]
+
+    Repeater {
+        model: root.hotkeys.filter(h => h.keys.length > 0)
+        // Shortcut ищет окно через родительский элемент — поэтому обёртка Item
+        delegate: Item {
+            required property var modelData
+            Shortcut {
+                sequences: modelData.keys
+                onActivated: modelData.action()
+            }
+        }
+    }
+
+    HotkeysPanel {
+        id: hotkeysPanel
+        objectName: "hotkeysPanel"
+        hotkeys: root.hotkeys
+    }
 
     FileDialog {
         id: fileDialog
@@ -182,6 +240,30 @@ ApplicationWindow {
                       : session.status
                 color: root.textDim
                 font.pixelSize: 13
+            }
+
+            Button {
+                id: helpButton
+                objectName: "helpButton"
+                onClicked: hotkeysPanel.open()
+                ToolTip.visible: hovered
+                ToolTip.text: "Клавиши и управление (F1)"
+                ToolTip.delay: 400
+                contentItem: Text {
+                    text: "?"
+                    color: root.textMain
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitWidth: 34
+                    implicitHeight: 34
+                    radius: 17
+                    color: helpButton.down ? "#2a2a33" : helpButton.hovered ? "#222228" : "transparent"
+                    border.color: "#3a3a44"
+                }
             }
         }
     }

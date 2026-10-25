@@ -181,3 +181,44 @@ def test_project_menu(ui: Ui, tmp_path: Path) -> None:
     QTest.keyClick(ui.win, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
     QTest.qWait(50)
     assert not ui.session.project.main and ui.session.title == "Новый проект"
+
+
+def test_hotkeys_panel_lists_every_shortcut(ui: Ui) -> None:
+    hotkeys = ui.win.property("hotkeys").toVariant()
+    keyed = [h for h in hotkeys if h["keys"]]
+    assert len(keyed) >= 15 and all(h["text"] for h in hotkeys)
+    sequences = [k for h in keyed for k in h["keys"]]
+    assert len(sequences) == len(set(sequences)), "одна клавиша — одно действие"
+
+    panel = ui.win.findChild(QObject, "hotkeysPanel")
+    assert panel is not None and not panel.property("visible")
+    QTest.keyClick(ui.win, Qt.Key.Key_F1)
+    QTest.qWait(100)
+    assert panel.property("visible")
+    QTest.keyClick(ui.win, Qt.Key.Key_Escape)
+    QTest.qWait(300)
+    assert not panel.property("visible")
+
+    button = ui.win.findChild(QQuickItem, "helpButton")
+    assert button is not None
+    centre = button.mapToScene(QPointF(button.width() / 2, button.height() / 2))
+    ui.click(centre.x(), centre.y())
+    QTest.qWait(100)
+    assert panel.property("visible")
+
+
+def test_shortcuts_from_the_list_work(ui: Ui) -> None:
+    ui.player.seek(20)
+    QTest.keyClick(ui.win, Qt.Key.Key_S)
+    QTest.qWait(50)
+    assert len(ui.session.clips) == 3
+    QTest.keyClick(ui.win, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.qWait(50)
+    assert len(ui.session.clips) == 2
+    QTest.keyClick(
+        ui.win,
+        Qt.Key.Key_Z,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    QTest.qWait(50)
+    assert len(ui.session.clips) == 3

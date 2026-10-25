@@ -16,6 +16,7 @@ from chestor_motion.project.model import (
     detach_audio,
     move,
     move_audio,
+    set_canvas,
     split,
     split_audio,
     trim_audio_end,
@@ -225,3 +226,11 @@ def test_move_audio_below_last_lane_makes_new_lane() -> None:
     assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
     p = move_audio(p, "b", 40, lane=0)  # обратно наверх — нижняя пустеет и исчезает
     assert [[c.id for c in lane] for lane in p.audio] == [["a", "b"]]
+
+
+def test_set_canvas_keeps_clips_and_evens_size() -> None:
+    p = add_clip(Project(width=642, height=360), Clip("a.mp4", 60, 0, 60))
+    q = set_canvas(p, 1081, 1921)
+    assert (q.width, q.height) == (1080, 1920) and q.main == p.main
+    with pytest.raises(ValueError):
+        set_canvas(p, 0, 1920)

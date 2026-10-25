@@ -360,3 +360,25 @@ def test_project_with_audio_reopens(qapp, clip: Path, music: Path, tmp_path: Pat
     finally:
         session.close()
         player.shutdown()
+
+
+def test_canvas_presets_and_original(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        assert session.canvas == "original"
+        player.seek(15)
+        session.setCanvas("9:16")
+        assert (session.project.width, session.project.height) == (1080, 1920)
+        assert session.canvas == "9:16"
+        assert player.size == (540, 960) and player.position == 15  # превью в новом профиле
+        session.setCanvas("1:1")
+        assert player.size == (960, 960)
+        session.undo()
+        assert session.canvas == "9:16"
+        session.setCanvas("original")
+        assert (session.project.width, session.project.height) == (642, 360)
+        assert session.canvas == "original"
+    finally:
+        session.close()
+        player.shutdown()

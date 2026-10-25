@@ -145,6 +145,28 @@ class Session(QObject):
     def canRedo(self) -> bool:
         return self._history.can_redo
 
+    @qproperty(str, notify=projectChanged)
+    def canvas(self) -> str:
+        """Холст: «9:16», «16:9», «1:1» или «original» — любой другой размер."""
+        size = (self.project.width, self.project.height)
+        return next((name for name, s in model.CANVASES.items() if s == size), "original")
+
+    @Slot(str)
+    def setCanvas(self, name: str) -> None:
+        project = self.project
+        if name in model.CANVASES:
+            size = model.CANVASES[name]
+        elif name == "original" and project.main:
+            try:
+                info = probe(project.main[0].source)
+            except OSError:
+                self._set_status(f"Не удалось открыть {Path(project.main[0].source).name}")
+                return
+            size = (info.width, info.height)
+        else:
+            return
+        self._apply(model.set_canvas(project, *size), position=self._player.position)
+
     @qproperty(list, notify=projectChanged)
     def clips(self) -> list:
         """Клипы основной дорожки для таймлайна: позиции уже посчитаны."""

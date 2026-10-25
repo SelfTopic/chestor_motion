@@ -15,6 +15,7 @@ from chestor_motion.project.model import (
     add_audio,
     add_clip,
     detach_audio,
+    set_canvas,
     trim_audio_end,
 )
 
@@ -119,3 +120,16 @@ def test_cancel_leaves_nothing(qapp, project: Project, tmp_path: Path) -> None:
     job.start()
     job.cancel()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_export_vertical_canvas_letterboxes_black(qapp, project: Project, tmp_path: Path) -> None:
+    vertical = set_canvas(project, 1080, 1920)
+    path = _run(ExportJob(vertical, ExportSettings(short_side=360), tmp_path / "v.mp4"))
+    frame = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1", "-f", "rawvideo",
+         "-pix_fmt", "gray", "-"],
+        check=True, capture_output=True,
+    ).stdout  # fmt: skip
+    assert len(frame) == 360 * 640
+    assert max(frame[: 360 * 100]) < 24  # верхнее поле чёрное
+    assert max(frame[360 * 300 : 360 * 340]) > 60  # посередине — сам клип

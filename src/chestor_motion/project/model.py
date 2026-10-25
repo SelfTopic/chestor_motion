@@ -15,6 +15,10 @@ from dataclasses import dataclass, field, replace
 
 FPS = 30
 
+# Холсты, как в CapCut: размер в пикселях задаёт только форму — итоговое разрешение выбирается
+# при экспорте по короткой стороне. «Оригинал» — размер первого видео, его считает сессия.
+CANVASES = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
+
 
 def new_id() -> str:
     return uuid.uuid4().hex[:12]
@@ -126,6 +130,13 @@ class Project:
 
 
 # --- правки: каждая возвращает новый проект ---
+
+
+def set_canvas(project: Project, width: int, height: int) -> Project:
+    """Сменить холст. Клипы MLT вписывает в него сам, по центру; пустое по краям — чёрное."""
+    if width < 2 or height < 2:
+        raise ValueError(f"холст {width}×{height} слишком мал")
+    return replace(project, width=width - width % 2, height=height - height % 2)
 
 
 def add_clip(project: Project, clip: Clip, index: int | None = None) -> Project:

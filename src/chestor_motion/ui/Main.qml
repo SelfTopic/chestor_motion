@@ -177,13 +177,15 @@ ApplicationWindow {
     component MenuEntry: MenuItem {
         id: entry
         property string shortcutText: ""
+        property bool current: false  // выбранный вариант — акцентным цветом
         implicitWidth: 260
         implicitHeight: 34
         contentItem: RowLayout {
             Text {
                 text: entry.text
-                color: "#f2f2f4"
+                color: entry.current ? "#22d3c5" : "#f2f2f4"
                 font.pixelSize: 14
+                font.weight: entry.current ? Font.DemiBold : Font.Normal
                 Layout.fillWidth: true
             }
             Text {
@@ -334,8 +336,19 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: 12
-            color: "#000000"
+            color: "#131317"
             clip: true
+
+            // Холст: MLT оставляет поля вокруг вписанного клипа прозрачными, в экспорте они
+            // чёрные — здесь тоже, а вокруг холста фон чуть светлее, чтобы были видны его края
+            Rectangle {
+                x: video.contentRect.x
+                y: video.contentRect.y
+                width: video.contentRect.width
+                height: video.contentRect.height
+                color: "#000000"
+                visible: video.visible
+            }
 
             VideoOutput {
                 id: video
@@ -415,6 +428,58 @@ ApplicationWindow {
             }
 
             Item { Layout.fillWidth: true }
+
+            Button {
+                id: canvasButton
+                objectName: "canvasButton"
+                onClicked: canvasMenu.open()
+                ToolTip.visible: hovered && !canvasMenu.visible
+                ToolTip.text: "Соотношение сторон холста"
+                ToolTip.delay: 400
+                contentItem: Text {
+                    text: "Холст: " + (session.canvas === "original" ? "оригинал" : session.canvas) + "  ▾"
+                    color: root.textMain
+                    font.pixelSize: 13
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitHeight: 34
+                    radius: 8
+                    color: canvasButton.down || canvasMenu.visible ? "#2a2a33"
+                         : canvasButton.hovered ? "#222228" : "transparent"
+                    border.color: "#3a3a44"
+                }
+
+                Menu {
+                    id: canvasMenu
+                    objectName: "canvasMenu"
+                    x: canvasButton.width - width
+                    y: -height - 4
+                    padding: 6
+                    background: Rectangle {
+                        implicitWidth: 260
+                        color: root.panel
+                        border.color: "#2c2c33"
+                        radius: 10
+                    }
+                    MenuEntry {
+                        text: "9:16"; shortcutText: "Shorts, Reels, TikTok"
+                        current: session.canvas === "9:16"; onTriggered: session.setCanvas("9:16")
+                    }
+                    MenuEntry {
+                        text: "16:9"; shortcutText: "YouTube"
+                        current: session.canvas === "16:9"; onTriggered: session.setCanvas("16:9")
+                    }
+                    MenuEntry {
+                        text: "1:1"; shortcutText: "квадрат"
+                        current: session.canvas === "1:1"; onTriggered: session.setCanvas("1:1")
+                    }
+                    MenuEntry {
+                        text: "Оригинал"; shortcutText: "как первое видео"
+                        current: session.canvas === "original"; onTriggered: session.setCanvas("original")
+                    }
+                }
+            }
         }
 
         Timeline {

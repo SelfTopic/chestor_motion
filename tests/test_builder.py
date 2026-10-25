@@ -5,7 +5,15 @@ import mlt7 as mlt
 import pytest
 
 from chestor_motion.engine.builder import Builder, make_profile
-from chestor_motion.project.model import Clip, Project, add_clip, split, trim_start
+from chestor_motion.project.model import (
+    Clip,
+    Project,
+    add_clip,
+    fill_scale,
+    set_transform,
+    split,
+    trim_start,
+)
 
 
 @pytest.fixture
@@ -134,3 +142,33 @@ def test_audio_tracks_mix_with_main(clip: Path, tmp_path: Path) -> None:
     # Где играют оба — громче, чем один основной (складываются, а не заменяют)
     assert both[1] > alone[1] * 1.5
     assert abs(both[6] - alone[6]) < 0.01
+
+
+def _alpha(tractor: mlt.Tractor, w: int, h: int, x: int, y: int) -> int:
+    tractor.seek(5)
+    image = bytes(tractor.get_frame().get_image(mlt.mlt_image_rgba, w, h))
+    return image[(y * w + x) * 4 + 3]
+
+
+def test_transform_places_clip_on_canvas(clip: Path) -> None:
+    """Клип 642×360 на холсте 9:16: вписан — сверху пусто; заполнить — закрыт весь холст;
+    маленький в левом верхнем углу — пусто справа внизу."""
+    profile = make_profile(180, 320)
+    b = Builder(profile)
+    p = add_clip(Project(1080, 1920), Clip(str(clip), 60, 0, 60, id="v"))
+    fitted = b.build(p)
+    assert not fitted.transforms  # type: ignore[attr-defined]  # вписанному фильтр не нужен
+    assert _alpha(fitted, 180, 320, 90, 10) == 0 and _alpha(fitted, 180, 320, 90, 160) == 255
+
+    fill = fill_scale((1080, 1920), (642, 360))
+    filled = b.build(set_transform(p, "v", 0, 0, fill))
+    assert _alpha(filled, 180, 320, 2, 2) == 255 and _alpha(filled, 180, 320, 177, 317) == 255
+
+    corner = b.build(set_transform(p, "v", -0.25, -0.4, 0.5))
+    assert _alpha(corner, 180, 320, 40, 30) == 255 and _alpha(corner, 180, 320, 150, 300) == 0
+
+
+def test_live_clip_gets_a_filter_to_move(clip: Path) -> None:
+    b = Builder(make_profile(180, 320))
+    p = add_clip(Project(1080, 1920), Clip(str(clip), 60, 0, 60, id="v"))
+    assert set(b.build(p, live="v").transforms) == {"v"}  # type: ignore[attr-defined]

@@ -8,7 +8,7 @@ from typing import Any
 from chestor_motion.project.model import AudioClip, Clip, Project
 
 FORMAT = "chestor_motion"
-VERSION = 2
+VERSION = 3
 SUFFIX = ".cmproj"
 
 
@@ -21,8 +21,16 @@ def _v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """v3: положение и масштаб видеоклипа на холсте."""
+    return {**data, "main": [{**c, "x": 0.0, "y": 0.0, "scale": 1.0} for c in data["main"]]}
+
+
 # MIGRATIONS[n] переводит данные версии n в версию n + 1
-MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _v1_to_v2}
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    1: _v1_to_v2,
+    2: _v2_to_v3,
+}
 
 
 class ProjectFormatError(ValueError):
@@ -43,6 +51,9 @@ def to_dict(project: Project) -> dict[str, Any]:
                 "in": c.in_frame,
                 "out": c.out_frame,
                 "audio": c.audio,
+                "x": c.x,
+                "y": c.y,
+                "scale": c.scale,
             }
             for c in project.main
         ],
@@ -84,6 +95,9 @@ def from_dict(data: dict[str, Any]) -> Project:
                     in_frame=int(c["in"]),
                     out_frame=int(c["out"]),
                     audio=bool(c["audio"]),
+                    x=float(c["x"]),
+                    y=float(c["y"]),
+                    scale=float(c["scale"]),
                 )
                 for c in data["main"]
             ),

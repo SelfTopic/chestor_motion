@@ -15,7 +15,9 @@ from chestor_motion.project.model import (
     add_audio,
     add_clip,
     detach_audio,
+    fill_scale,
     set_canvas,
+    set_transform,
     trim_audio_end,
 )
 
@@ -133,3 +135,17 @@ def test_export_vertical_canvas_letterboxes_black(qapp, project: Project, tmp_pa
     assert len(frame) == 360 * 640
     assert max(frame[: 360 * 100]) < 24  # верхнее поле чёрное
     assert max(frame[360 * 300 : 360 * 340]) > 60  # посередине — сам клип
+
+
+def test_export_filled_clip_covers_canvas(qapp, project: Project, tmp_path: Path) -> None:
+    vertical = set_canvas(project, 1080, 1920)
+    filled = set_transform(vertical, "v", 0, 0, fill_scale((1080, 1920), (642, 360)))
+    path = _run(ExportJob(filled, ExportSettings(short_side=360), tmp_path / "f.mp4"))
+    frame = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1", "-f", "rawvideo",
+         "-pix_fmt", "gray", "-"],
+        check=True, capture_output=True,
+    ).stdout  # fmt: skip
+    assert (
+        min(max(frame[i * 360 : (i + 1) * 360]) for i in range(640)) > 40
+    )  # ни одной чёрной строки

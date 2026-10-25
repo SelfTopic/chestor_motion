@@ -382,3 +382,38 @@ def test_canvas_presets_and_original(qapp, clip: Path, tmp_path: Path) -> None:
     finally:
         session.close()
         player.shutdown()
+
+
+def test_drag_on_preview_is_one_undo_step(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        session.setCanvas("9:16")
+        clip_id = session.frame["id"]
+        assert session.frame["width"] == 1.0 and session.frame["left"] == 0.0
+        project = session.project
+        for i in range(1, 6):  # тащим: модель и история не меняются
+            session.previewTransform(clip_id, 0.02 * i, 0.0, 1.0 + 0.1 * i)
+        assert session.project is project
+        session.setTransform(clip_id, 0.1, 0.0, 1.5)
+        assert (session.frame["x"], session.frame["scale"]) == (0.1, 1.5)
+        session.undo()
+        assert session.project == project
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_toggle_fill(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        session.setCanvas("9:16")
+        session.toggleFill()
+        frame = session.frame
+        assert abs(frame["height"] - 1.0) < 1e-9 and frame["width"] > 1.0
+        session.toggleFill()
+        assert session.frame["scale"] == 1.0
+    finally:
+        session.close()
+        player.shutdown()

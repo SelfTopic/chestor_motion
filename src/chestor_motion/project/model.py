@@ -18,6 +18,25 @@ FPS = 30
 # Холсты, как в CapCut: размер в пикселях задаёт только форму — итоговое разрешение выбирается
 # при экспорте по короткой стороне. «Оригинал» — размер первого видео, его считает сессия.
 CANVASES = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
+MIN_SCALE, MAX_SCALE = 0.05, 20.0
+
+
+def frame_rect(
+    canvas: tuple[float, float], source: tuple[float, float], x: float, y: float, scale: float
+) -> tuple[float, float, float, float]:
+    """Где клип на холсте: (левый край, верхний, ширина, высота) в единицах холста."""
+    cw, ch = canvas
+    sw, sh = source
+    k = min(cw / sw, ch / sh) * scale
+    w, h = sw * k, sh * k
+    return cw / 2 + x * cw - w / 2, ch / 2 + y * ch - h / 2, w, h
+
+
+def fill_scale(canvas: tuple[float, float], source: tuple[float, float]) -> float:
+    """Масштаб «заполнить холст»: клип закрывает его целиком, лишнее обрезается."""
+    cw, ch = canvas
+    sw, sh = source
+    return max(cw / sw, ch / sh) / min(cw / sw, ch / sh)
 
 
 def new_id() -> str:
@@ -32,9 +51,21 @@ class Clip:
     out_frame: int  # кадр исходника сразу после последнего используемого
     id: str = field(default_factory=new_id)
     audio: bool = True  # играет свой звук; после «отделить звук» — нет
+    # Положение на холсте: сдвиг центра клипа от центра холста в долях его ширины и высоты,
+    # масштаб относительно «вписан целиком» (1.0). Так клип остаётся на месте при смене
+    # разрешения экспорта.
+    x: float = 0.0
+    y: float = 0.0
+    scale: float = 1.0
 
     def __post_init__(self) -> None:
         _check_range(self.id, self.in_frame, self.out_frame, self.source_length)
+        if not MIN_SCALE <= self.scale <= MAX_SCALE:
+            raise ValueError(f"клип {self.id}: масштаб {self.scale} вне {MIN_SCALE}…{MAX_SCALE}")
+
+    @property
+    def transformed(self) -> bool:
+        return (self.x, self.y, self.scale) != (0.0, 0.0, 1.0)
 
     @property
     def length(self) -> int:
@@ -189,6 +220,13 @@ def trim_end(project: Project, clip_id: str, out_frame: int) -> Project:
     clip = project.main[index]
     out_frame = max(clip.in_frame + 1, min(out_frame, clip.source_length))
     return _replace_clip(project, index, replace(clip, out_frame=out_frame))
+
+
+def set_transform(project: Project, clip_id: str, x: float, y: float, scale: float) -> Project:
+    """Положение клипа основной дорожки на холсте; масштаб зажимается в допустимые пределы."""
+    index = project.index_of(clip_id)
+    scale = min(max(scale, MIN_SCALE), MAX_SCALE)
+    return _replace_clip(project, index, replace(project.main[index], x=x, y=y, scale=scale))
 
 
 def _replace_clip(project: Project, index: int, clip: Clip) -> Project:

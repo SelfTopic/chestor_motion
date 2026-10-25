@@ -66,6 +66,9 @@ ApplicationWindow {
         { group: "Монтаж", keys: ["D"], label: "D",
           text: "Отделить звук видеоклипа на звуковую дорожку (выделенного или под плейхедом)",
           action: () => session.detachAudio() },
+        { group: "Монтаж", keys: ["F"], label: "F",
+          text: "Заполнить холст клипом (выделенным или под плейхедом), ещё раз — вписать",
+          action: () => session.toggleFill() },
         { group: "Монтаж", keys: ["Escape"], label: "Esc",
           text: "Снять выделение", action: () => session.select("") },
         { group: "Монтаж", keys: ["Ctrl+Z"], label: "Ctrl+Z",
@@ -74,6 +77,17 @@ ApplicationWindow {
         // неоднозначным — тогда Qt не вызывает ни один из ярлыков
         { group: "Монтаж", keys: ["Ctrl+Shift+Z", "Ctrl+Y"], label: "Ctrl+Shift+Z",
           text: "Повторить", action: () => session.redo() },
+
+        { group: "Превью", keys: [], label: "Клик по картинке",
+          text: "Выделить клип под плейхедом — появится рамка" },
+        { group: "Превью", keys: [], label: "Тянуть картинку",
+          text: "Двигать клип по холсту; у центра прилипает" },
+        { group: "Превью", keys: [], label: "Углы рамки",
+          text: "Масштаб; прилипает к «вписать» и «заполнить»" },
+        { group: "Превью", keys: [], label: "Колесо",
+          text: "Масштаб выделенного клипа" },
+        { group: "Превью", keys: [], label: "Двойной щелчок",
+          text: "Заполнить холст / вписать обратно (как F)" },
 
         { group: "Таймлайн", keys: [], label: "Клик по клипу",
           text: "Выделить клип и перемотать в это место" },
@@ -336,19 +350,9 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: 12
+            // Холст в кадре чёрный, фон вокруг чуть светлее — видны края холста
             color: "#131317"
             clip: true
-
-            // Холст: MLT оставляет поля вокруг вписанного клипа прозрачными, в экспорте они
-            // чёрные — здесь тоже, а вокруг холста фон чуть светлее, чтобы были видны его края
-            Rectangle {
-                x: video.contentRect.x
-                y: video.contentRect.y
-                width: video.contentRect.width
-                height: video.contentRect.height
-                color: "#000000"
-                visible: video.visible
-            }
 
             VideoOutput {
                 id: video
@@ -375,6 +379,14 @@ ApplicationWindow {
                     color: root.textDim
                     font.pixelSize: 14
                 }
+            }
+
+            CanvasEditor {
+                anchors.fill: parent
+                session: root.session
+                player: root.player
+                canvas: video.contentRect
+                visible: player.hasMedia
             }
 
             Rectangle {

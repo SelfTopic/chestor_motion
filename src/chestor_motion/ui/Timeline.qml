@@ -311,6 +311,13 @@ Rectangle {
             height: visible ? implicitHeight : 0
             onTriggered: timeline.session.detachAudio()
         }
+        ClipMenuEntry {
+            text: "Заполнить холст / вписать"
+            shortcutText: "F"
+            visible: !clipMenu.isAudio
+            height: visible ? implicitHeight : 0
+            onTriggered: timeline.session.fitClip(clipMenu.clipId, "toggle")
+        }
         ClipMenuEntry { text: "Удалить"; shortcutText: "Delete"; onTriggered: timeline.session.deleteSelectedOrAtPlayhead() }
     }
 

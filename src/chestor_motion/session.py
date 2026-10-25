@@ -13,6 +13,7 @@ from pathlib import Path
 import mlt7 as mlt
 from PySide6.QtCore import QByteArray, QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
+from chestor_motion.engine import mltlib
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.export import (
     ExportJob,
@@ -60,6 +61,7 @@ class Session(QObject):
     imported = Signal()
     fileChanged = Signal()
     exportChanged = Signal()
+    frameChanged = Signal()
 
     def __init__(
         self,
@@ -92,6 +94,10 @@ class Session(QObject):
         self._proxy_running: ProxyJob | None = None
         self._progress: dict[str, float] = {}
         self._proxy_sizes: dict[str, tuple[int, int]] = {}
+        self._source_sizes: dict[str, tuple[int, int]] = {}
+        # Клип, который двигают на превью: ему в графе стоит фильтр положения (см. Builder.build)
+        self._live = ""
+        self._transforms: dict[str, mlt.Filter] = {}
         self._lengths: dict[str, int] = {}
         self._thumb_jobs: dict[str, ThumbJob] = {}
         self._thumbs: dict[str, dict] = {}
@@ -106,6 +112,8 @@ class Session(QObject):
         self._export_progress = 0.0
         self._export_path = ""
         self._export_error = ""
+        player.positionChanged.connect(self.frameChanged)
+        self.projectChanged.connect(self.frameChanged)
 
     # --- свойства для QML ---
 
@@ -166,6 +174,85 @@ class Session(QObject):
         else:
             return
         self._apply(model.set_canvas(project, *size), position=self._player.position)
+
+    @qproperty(dict, notify=frameChanged)
+    def frame(self) -> dict:
+        """Видеоклип под плейхедом и его рамка на холсте в долях холста — для правки на превью.
+        Пустой словарь, если под плейхедом нет видео."""
+        hit = self.project.clip_at(self._player.position)
+        if hit is None:
+            return {}
+        clip = self.project.main[hit[0]]
+        size = self._source_size(clip.source)
+        if size is None:
+            return {}
+        canvas = (self.project.width, self.project.height)
+        left, top, w, h = model.frame_rect(canvas, size, clip.x, clip.y, clip.scale)
+        return {
+            "id": clip.id,
+            "x": clip.x,
+            "y": clip.y,
+            "scale": clip.scale,
+            "fill": model.fill_scale(canvas, size),
+            # рамка в долях холста; aspect — ширина к высоте самого клипа на холсте
+            "left": left / canvas[0],
+            "top": top / canvas[1],
+            "width": w / canvas[0],
+            "height": h / canvas[1],
+        }
+
+    @Slot(str, float, float, float)
+    def previewTransform(self, clip_id: str, x: float, y: float, scale: float) -> None:
+        """Пока клип тащат: двигаем картинку, не трогая модель и историю. Граф пересобирается
+        один раз — поставить клипу фильтр, дальше меняется только его прямоугольник."""
+        if not self._is_main(clip_id) or self._builder is None:
+            return
+        if clip_id not in self._transforms:
+            self._live = clip_id
+            self._rebuild()
+        transform = self._transforms.get(clip_id)
+        if transform is None:
+            return
+        clip = self.project.main[self.project.index_of(clip_id)]
+        scale = min(max(scale, model.MIN_SCALE), model.MAX_SCALE)
+        rect = self._builder.rect(clip, x, y, scale)
+        # Граф уже у работающего плеера — только ctypes (см. mltlib)
+        mltlib.properties_set(int(transform.get_properties()), "rect", rect)
+        self._player.redraw()
+
+    @Slot(str, float, float, float)
+    def setTransform(self, clip_id: str, x: float, y: float, scale: float) -> None:
+        """Отпустили клип — положение в модель, одной правкой для отмены."""
+        if not self._is_main(clip_id):
+            return
+        self._live = ""
+        project = model.set_transform(self.project, clip_id, x, y, scale)
+        if project == self.project:
+            self._rebuild()  # убрать фильтр, поставленный на время перетаскивания
+        else:
+            self._apply(project)
+
+    @Slot()
+    def toggleFill(self) -> None:
+        """F: заполнить холст клипом (выделенным или под плейхедом), ещё раз — вписать."""
+        clip_id = self._selected if self._is_main(self._selected) else self.frame.get("id", "")
+        if clip_id:
+            self.fitClip(clip_id, "toggle")
+
+    @Slot(str, str)
+    def fitClip(self, clip_id: str, mode: str) -> None:
+        """mode: fit — вписать по центру, fill — заполнить, toggle — одно или другое."""
+        if not self._is_main(clip_id):
+            return
+        clip = self.project.main[self.project.index_of(clip_id)]
+        size = self._source_size(clip.source)
+        if size is None:
+            return
+        fill = model.fill_scale((self.project.width, self.project.height), size)
+        if mode == "toggle":
+            filled = (clip.x, clip.y) == (0.0, 0.0) and abs(clip.scale - fill) < 1e-3
+            mode = "fit" if filled else "fill"
+        self.setTransform(clip_id, 0.0, 0.0, fill if mode == "fill" else 1.0)
 
     @qproperty(list, notify=projectChanged)
     def clips(self) -> list:
@@ -276,6 +363,7 @@ class Session(QObject):
         clip = Clip(source=source, source_length=info.length, in_frame=0, out_frame=info.length)
         self._apply(model.add_clip(project, clip), position=project.main_length)
         self.imported.emit()
+        self._source_sizes[source] = (info.width, info.height)
         self._start_proxy(source, info.width, info.height, info.length)
         self._start_wave(source)
 
@@ -607,6 +695,7 @@ class Session(QObject):
         if project != self._saved and not self._autosave.isActive():
             self._autosave.start()
         if not project.main and not project.audio:
+            self._transforms = {}
             self._player.clear()
             if self._selected:
                 self._selected = ""
@@ -618,11 +707,24 @@ class Session(QObject):
             self._profile = make_profile(*size)
             self._builder = Builder(self._profile, resolve=lambda s: self._proxies.get(s, s))
         assert self._builder is not None
-        self._player.show(self._builder.build(project), self._profile, position)
+        tractor = self._builder.build(project, live=self._live)
+        self._transforms = tractor.transforms  # type: ignore[attr-defined]
+        self._player.show(tractor, self._profile, position)
         if self._selected and not self._has(self._selected):
             self._selected = ""
             self.selectionChanged.emit()
         self.projectChanged.emit()
+
+    def _source_size(self, source: str) -> tuple[int, int] | None:
+        """Размер оригинала: нужен, чтобы знать пропорции клипа на холсте."""
+        size = self._source_sizes.get(source)
+        if size is None:
+            try:
+                info = probe(source)
+            except OSError:
+                return None
+            size = self._source_sizes[source] = (info.width, info.height)
+        return size
 
     def _start_proxy(self, source: str, width: int, height: int, length: int) -> None:
         if source in self._proxies or source in self._jobs:

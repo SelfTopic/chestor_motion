@@ -11,7 +11,7 @@ from pathlib import Path
 import mlt7 as mlt
 
 from chestor_motion.engine import mltlib
-from chestor_motion.project.model import FPS, Project
+from chestor_motion.project.model import FPS, Clip, Project, frame_rect
 
 
 def make_profile(width: int, height: int, fps: int = FPS) -> mlt.Profile:
@@ -95,11 +95,25 @@ class Builder:
         for key in [k for k in self._cache if k[0] in paths]:
             del self._cache[key]
 
-    def build(self, project: Project) -> mlt.Tractor:
-        """Дорожка 0 — основная, дальше звуковые; переходы mix складывают звук всех дорожек."""
+    def rect(self, clip: Clip, x: float, y: float, scale: float) -> str:
+        """Прямоугольник для qtblend в пикселях профиля. Только целые: дробное вроде «-0.00»
+        qtblend не разбирает и молча не рисует кадр."""
+        producer = self.producer(clip.source, AV if clip.audio else VIDEO_ONLY)
+        source = (producer.get_int("width") or 1, producer.get_int("height") or 1)
+        canvas = (self._profile.width(), self._profile.height())
+        left, top, w, h = frame_rect(canvas, source, x, y, scale)
+        return f"{round(left)} {round(top)} {round(w)} {round(h)} 1"
+
+    def build(self, project: Project, live: str = "") -> mlt.Tractor:
+        """Дорожка 0 — основная, дальше звуковые; переходы mix складывают звук всех дорожек.
+
+        live: id клипа, который сейчас двигают на превью, — ему фильтр положения нужен, даже
+        если клип пока на месте, чтобы менять прямоугольник на лету (`tractor.transforms`)."""
         tractor = mlt.Tractor(self._profile)
         main = mlt.Playlist(self._profile)
         k = self._k
+        keep: list[object] = [main]
+        transforms: dict[str, mlt.Filter] = {}
         for clip in project.main:
             producer = self.producer(clip.source, AV if clip.audio else VIDEO_ONLY)
             # У прокси и оригинала длина может отличаться на пару кадров (переменная
@@ -107,8 +121,15 @@ class Builder:
             last = min(clip.out_frame * k, producer.get_length()) - 1
             # В MLT out включительный, в модели — нет
             main.append(producer, clip.in_frame * k, max(clip.in_frame * k, last))
+            # Вписанный по центру клип MLT ставит сам; qtblend на нём стоил бы 10–20% скорости
+            if clip.transformed or clip.id == live:
+                transform = mlt.Filter(self._profile, "qtblend")
+                transform.set("rect", self.rect(clip, clip.x, clip.y, clip.scale))
+                cut = main.get_clip(main.count() - 1)
+                cut.attach(transform)
+                transforms[clip.id] = transform
+                keep += [cut, transform]
         tractor.set_track(main, 0)
-        keep: list[object] = [main]
 
         for index, lane in enumerate(project.audio, start=1):
             playlist = mlt.Playlist(self._profile)
@@ -131,4 +152,5 @@ class Builder:
         # Дорожки и переходы живут, пока жив трактор: иначе Python освободит их раньше, чем
         # консьюмер перестанет их читать
         tractor.keep_alive = keep  # type: ignore[attr-defined]
+        tractor.transforms = transforms  # type: ignore[attr-defined]
         return tractor

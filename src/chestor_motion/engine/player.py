@@ -3,8 +3,9 @@
 
 import mlt7 as mlt
 import shiboken6
-from PySide6.QtCore import Property, QObject, QSize, Qt, QTimer, Signal, Slot
-from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat, QVideoSink
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QImage
+from PySide6.QtMultimedia import QVideoFrame, QVideoSink
 
 from chestor_motion.engine import mltlib
 from chestor_motion.qt import qproperty
@@ -15,19 +16,12 @@ SEEK_TIMEOUT_MS = 250
 
 
 def _to_video_frame(rgba: bytes, w: int, h: int) -> QVideoFrame:
-    fmt = QVideoFrameFormat(QSize(w, h), QVideoFrameFormat.PixelFormat.Format_RGBA8888)
-    frame = QVideoFrame(fmt)
-    frame.map(QVideoFrame.MapMode.WriteOnly)
-    dst = memoryview(frame.bits(0))  # type: ignore[arg-type]
-    stride = frame.bytesPerLine(0)
-    row = w * 4
-    if stride == row:
-        dst[: len(rgba)] = rgba
-    else:
-        for y in range(h):
-            dst[y * stride : y * stride + row] = rgba[y * row : (y + 1) * row]
-    frame.unmap()
-    return frame
+    # Альфа — в 255. Поля холста вокруг сдвинутого клипа (qtblend) прозрачные, а VideoOutput
+    # кадр не смешивает с подложкой, а копирует — прозрачный пиксель пробивал дыру в окне.
+    # Цвет там (0, 0, 0) — выходит чёрный, как в экспорте. Конвертация Qt стоит ~0.2 мс, как
+    # и прежнее копирование байтов.
+    image = QImage(rgba, w, h, w * 4, QImage.Format.Format_RGBA8888)
+    return QVideoFrame(image.convertToFormat(QImage.Format.Format_RGBX8888))
 
 
 class Player(QObject):
@@ -208,6 +202,16 @@ class Player(QObject):
         if self._playing:
             self.pause()
         self.seek(self._position + frames)
+
+    def redraw(self) -> None:
+        """Показать текущий кадр заново — после правки фильтра на лету. На паузе это перемотка
+        на то же место (с её склейкой частых вызовов), при воспроизведении — сброс упреждения."""
+        if not self._producer_ptr:
+            return
+        if self._playing:
+            mltlib.consumer_purge(self._consumer_ptr)
+        else:
+            self.seek(self._position)
 
     def shutdown(self) -> None:
         """Окончательно: после этого show() ничего не делает."""

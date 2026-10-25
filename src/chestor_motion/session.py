@@ -88,6 +88,14 @@ class Session(QObject):
     def projectPath(self) -> str:
         return str(self._path) if self._path else ""
 
+    @qproperty(str, notify=fileChanged)
+    def saveFolder(self) -> str:
+        """Где начинать «Сохранить как»: у проекта — его папка, у нового — «Видео»."""
+        if self._path and self._path.parent != self.drafts_dir:
+            return QUrl.fromLocalFile(str(self._path.parent)).toString()
+        movies = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
+        return QUrl.fromLocalFile(movies).toString()
+
     @qproperty(str, notify=statusChanged)
     def status(self) -> str:
         return self._status
@@ -149,14 +157,15 @@ class Session(QObject):
 
     # --- импорт ---
 
-    @Slot(QUrl)
-    def open(self, url: QUrl) -> None:
-        self.import_path(Path(url.toLocalFile()))
-
     @Slot(list)
     def importUrls(self, urls: list[QUrl]) -> None:
         for url in urls:
             self.import_path(Path(url.toLocalFile()))
+
+    @Slot(list)
+    def importPaths(self, paths: list[str]) -> None:
+        for path in paths:
+            self.import_path(Path(path))
 
     def import_path(self, path: Path) -> None:
         source = str(path.resolve())
@@ -244,9 +253,9 @@ class Session(QObject):
         self.flush()
         self._set_project(Project(), None)
 
-    @Slot(QUrl)
-    def openProject(self, url: QUrl) -> None:
-        self.open_project(Path(url.toLocalFile()))
+    @Slot(str)
+    def openProjectPath(self, path: str) -> None:
+        self.open_project(Path(path))
 
     def open_project(self, path: Path) -> bool:
         try:

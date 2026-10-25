@@ -118,6 +118,7 @@ class FileBrowser(QObject):
         super().__init__(parent)
         self._state = State(data_dir)
         self._drafts = drafts_dir
+        drafts_dir.mkdir(parents=True, exist_ok=True)  # чтобы «Черновики» были в местах сразу
         self._search_id = 0
         self._cancel = threading.Event()
 

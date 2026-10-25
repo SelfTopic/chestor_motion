@@ -1,11 +1,12 @@
 """Таймлайн мышью на настоящем QML (offscreen): то, что сломать легче всего незаметно."""
 
 import os
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QObject, QPoint, QPointF, Qt
+from PySide6.QtCore import QMetaObject, QObject, QPoint, QPointF, Qt
 from PySide6.QtGui import QGuiApplication, QWheelEvent
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem, QQuickWindow
@@ -13,6 +14,7 @@ from PySide6.QtTest import QTest
 
 from chestor_motion.__main__ import QML_DIR
 from chestor_motion.engine.player import Player
+from chestor_motion.files import FileBrowser
 from chestor_motion.session import Session
 from tests.conftest import SILENT_AUDIO_OUT
 
@@ -30,7 +32,10 @@ class Ui:
         self.engine = QQmlApplicationEngine()
         self.warnings: list[str] = []
         self.engine.warnings.connect(lambda ws: self.warnings.extend(w.toString() for w in ws))
-        self.engine.setInitialProperties({"player": self.player, "session": self.session})
+        self.files = FileBrowser(self.session.data_dir, self.session.drafts_dir)
+        self.engine.setInitialProperties(
+            {"player": self.player, "session": self.session, "files": self.files}
+        )
         self.engine.load(QML_DIR / "Main.qml")
         window = self.engine.rootObjects()[0]
         assert isinstance(window, QQuickWindow)
@@ -75,6 +80,16 @@ class Ui:
         )  # fmt: skip
         QGuiApplication.sendEvent(self.win, event)
         QTest.qWait(30)
+
+    def type(self, text: str) -> None:
+        """QTest.keyClicks в PySide только для виджетов — печатаем по клавише."""
+        for ch in text:
+            QTest.keyClick(self.win, Qt.Key(ord(ch.upper())))
+
+    def browser(self) -> QObject:
+        browser = self.win.findChild(QObject, "fileBrowser")
+        assert browser is not None
+        return browser
 
     def close(self) -> None:
         del self.engine
@@ -185,7 +200,7 @@ def test_project_menu(ui: Ui, tmp_path: Path) -> None:
 
 def test_hotkeys_panel_lists_every_shortcut(ui: Ui) -> None:
     hotkeys = ui.win.property("hotkeys").toVariant()
-    keyed = [h for h in hotkeys if h["keys"]]
+    keyed = [h for h in hotkeys if h["keys"] and not h.get("local")]
     assert len(keyed) >= 15 and all(h["text"] for h in hotkeys)
     sequences = [k for h in keyed for k in h["keys"]]
     assert len(sequences) == len(set(sequences)), "одна клавиша — одно действие"
@@ -222,3 +237,61 @@ def test_shortcuts_from_the_list_work(ui: Ui) -> None:
     )
     QTest.qWait(50)
     assert len(ui.session.clips) == 3
+
+
+def test_file_browser_search_and_import(ui: Ui, clip: Path, tmp_path: Path) -> None:
+    media = tmp_path / "media"
+    (media / "deep" / "er").mkdir(parents=True)
+    shutil.copy(clip, media / "deep" / "er" / "sample shot.mp4")
+    (media / ".hidden").mkdir()
+    (media / "notes.txt").write_text("x")
+
+    browser = ui.browser()
+    QTest.keyClick(ui.win, Qt.Key.Key_I, Qt.KeyboardModifier.ControlModifier)
+    QTest.qWait(100)
+    assert browser.property("visible") and browser.property("mode") == "media"
+
+    browser.setProperty("folder", str(media))
+    QMetaObject.invokeMethod(browser, "refresh")
+    names = [e["name"] for e in browser.property("entries")]
+    assert names == ["deep"]  # скрытое и не-видео не видно
+
+    QTest.keyClick(ui.win, Qt.Key.Key_H, Qt.KeyboardModifier.ControlModifier)
+    QTest.qWait(50)
+    assert ".hidden" in [e["name"] for e in browser.property("entries")]
+
+    clips_before = len(ui.session.clips)
+    QTest.keyClick(ui.win, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+    ui.type("sample")  # «s» не должна резать клип на таймлайне
+    QTest.qWait(400)  # поиск стартует, когда перестали печатать (250 мс)
+    for _ in range(30):
+        if not browser.property("busy"):
+            break
+        QTest.qWait(100)
+    assert browser.property("searching")
+    found = browser.property("entries")
+    assert [e["name"] for e in found] == ["sample shot.mp4"]
+    assert len(ui.session.clips) == clips_before
+
+    QTest.keyClick(ui.win, Qt.Key.Key_Down)  # из поиска — в список
+    QTest.keyClick(ui.win, Qt.Key.Key_Return)
+    QTest.qWait(100)
+    assert not browser.property("visible")
+    assert len(ui.session.clips) == clips_before + 1
+    recent = [p["path"] for p in ui.files.places if p["kind"] == "recent"]
+    assert recent[0] == str(media / "deep" / "er")
+
+
+def test_file_browser_escape_clears_search_then_closes(ui: Ui) -> None:
+    browser = ui.browser()
+    QTest.keyClick(ui.win, Qt.Key.Key_O, Qt.KeyboardModifier.ControlModifier)
+    QTest.qWait(100)
+    assert browser.property("mode") == "project"
+    QTest.keyClick(ui.win, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+    ui.type("x")
+    QTest.keyClick(ui.win, Qt.Key.Key_Escape)
+    QTest.qWait(50)
+    assert browser.property("visible") and not browser.property("searching")
+    QTest.keyClick(ui.win, Qt.Key.Key_Escape)
+    QTest.qWait(300)
+    assert not browser.property("visible")

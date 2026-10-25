@@ -18,7 +18,7 @@ Popup {
 
     parent: Overlay.overlay
     anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 64 : 980, 980)
+    width: Math.min(parent ? parent.width - 64 : 1200, 1200)
     height: Math.min(parent ? parent.height - 64 : 640, content.implicitHeight + 2 * padding)
     modal: true
     focus: true
@@ -61,11 +61,11 @@ Popup {
                 }
             }
 
-            // Группы в две колонки, когда хватает ширины: так всё видно без прокрутки
+            // Группы в несколько колонок, когда хватает ширины: так всё видно без прокрутки
             GridLayout {
                 Layout.fillWidth: true
-                columns: content.width > 760 ? 2 : 1
-                columnSpacing: 32
+                columns: content.width > 1050 ? 3 : content.width > 700 ? 2 : 1
+                columnSpacing: 28
                 rowSpacing: 18
 
                 Repeater {
@@ -94,7 +94,7 @@ Popup {
 
                                 // Клавиша — «кнопкой», действие мышью — просто текстом
                                 Item {
-                                    Layout.preferredWidth: 140
+                                    Layout.preferredWidth: 128
                                     Layout.alignment: Qt.AlignTop
                                     implicitHeight: keyCap.implicitHeight
 

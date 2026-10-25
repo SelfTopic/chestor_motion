@@ -6,6 +6,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import mlt7 as mlt
 
@@ -26,11 +27,15 @@ def make_profile(width: int, height: int) -> mlt.Profile:
     return profile
 
 
+AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
+
+
 @dataclass(frozen=True)
 class SourceInfo:
     width: int
     height: int
     length: int  # в кадрах проекта
+    has_video: bool  # False — звуковой файл (обложка mp3 видео не считается)
 
 
 def probe(path: str) -> SourceInfo:
@@ -39,7 +44,12 @@ def probe(path: str) -> SourceInfo:
     producer = mlt.Producer(profile, path)
     if not producer.is_valid():
         raise OSError(f"MLT не открывает {path}")
-    return SourceInfo(producer.get_int("width"), producer.get_int("height"), producer.get_length())
+    has_video = (
+        producer.get_int("video_index") >= 0 and Path(path).suffix.lower() not in AUDIO_SUFFIXES
+    )
+    return SourceInfo(
+        producer.get_int("width"), producer.get_int("height"), producer.get_length(), has_video
+    )
 
 
 # Вид источника: обычный, без звука (видеоклип с отделённым звуком), только звук (звуковой

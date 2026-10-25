@@ -32,3 +32,15 @@ def clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
         check=True,
     )  # fmt: skip
     return path
+
+
+@pytest.fixture(scope="session")
+def music(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """3 секунды «музыки» — тон 660 Гц в mp3."""
+    path = tmp_path_factory.mktemp("media") / "music.mp3"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=660:duration=3",
+         str(path)],
+        check=True,
+    )  # fmt: skip
+    return path

@@ -185,7 +185,7 @@ Popup {
             spacing: 12
 
             Text {
-                text: panel.mode === "project" ? "Открыть проект" : "Импорт видео"
+                text: panel.mode === "project" ? "Открыть проект" : "Импорт видео и звука"
                 color: panel.textMain
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
@@ -400,7 +400,8 @@ Popup {
                                 border.color: row.modelData.isDir ? "#4c8cf0" : "#3a3a44"
                                 Text {
                                     anchors.centerIn: parent
-                                    text: row.modelData.isDir ? "" : (panel.mode === "project" ? "◆" : "▶")
+                                    text: row.modelData.isDir ? "" : panel.mode === "project" ? "◆"
+                                        : row.modelData.isAudio ? "♪" : "▶"
                                     color: panel.accent
                                     font.pixelSize: 9
                                 }
@@ -459,7 +460,7 @@ Popup {
                         visible: panel.entries.length === 0
                         text: panel.busy ? "Ищу…"
                             : panel.searching ? "Ничего не нашлось"
-                            : panel.mode === "project" ? "Здесь нет проектов" : "Здесь нет видео"
+                            : panel.mode === "project" ? "Здесь нет проектов" : "Здесь нет видео и звука"
                         color: panel.textDim
                         font.pixelSize: 13
                     }

@@ -146,10 +146,32 @@ class Session(QObject):
                     "inFrame": c.in_frame,
                     "outFrame": c.out_frame,
                     "sourceLength": c.source_length,
+                    "audio": c.audio,
                 }
             )
             start += c.length
         return out
+
+    @qproperty(list, notify=projectChanged)
+    def audioLanes(self) -> list:
+        """Звуковые дорожки для таймлайна: список дорожек, в каждой — клипы."""
+        return [
+            [
+                {
+                    "id": c.id,
+                    "source": c.source,
+                    "start": c.start,
+                    "length": c.length,
+                    "inFrame": c.in_frame,
+                    "outFrame": c.out_frame,
+                    "sourceLength": c.source_length,
+                    "lane": lane_index,
+                    "name": Path(c.source).stem,
+                }
+                for c in lane
+            ]
+            for lane_index, lane in enumerate(self.project.audio)
+        ]
 
     @qproperty(str, notify=selectionChanged)
     def selectedClip(self) -> str:
@@ -197,13 +219,21 @@ class Session(QObject):
             self._set_status(f"Не удалось открыть {path.name}")
             return
         project = self.project
-        if not project.main:
+        if not info.has_video:
+            # Музыка и звуки — на звуковую дорожку у плейхеда, как в CapCut
+            at = self._player.position if project.length else 0
+            sound = model.AudioClip(source, info.length, 0, info.length, start=at)
+            self._apply(model.add_audio(project, sound), position=at)
+            self.imported.emit()
+            self._start_wave(source)
+            return
+        if not project.main and not project.audio:
             # Первый клип задаёт холст, как «Оригинал» в CapCut; выбор сторон — позже
             project = Project(
                 width=info.width - info.width % 2, height=info.height - info.height % 2
             )
         clip = Clip(source=source, source_length=info.length, in_frame=0, out_frame=info.length)
-        self._apply(model.add_clip(project, clip), position=project.length)
+        self._apply(model.add_clip(project, clip), position=project.main_length)
         self.imported.emit()
         self._start_proxy(source, info.width, info.height, info.length)
         self._start_wave(source)
@@ -212,7 +242,36 @@ class Session(QObject):
 
     @Slot()
     def splitAtPlayhead(self) -> None:
-        self._apply(model.split(self.project, self._player.position))
+        """S: выделенный звуковой клип, если плейхед внутри него, иначе основная дорожка."""
+        frame = self._player.position
+        found = self.project.audio_clip(self._selected)
+        if found is not None and found[1].start < frame < found[1].end:
+            self._apply(model.split_audio(self.project, self._selected, frame))
+        else:
+            self._apply(model.split(self.project, frame))
+
+    @Slot()
+    def detachAudio(self) -> None:
+        """Отделить звук выделенного видеоклипа, а если не выделен — клипа под плейхедом."""
+        clip_id = self._selected if self._is_main(self._selected) else ""
+        if not clip_id:
+            hit = self.project.clip_at(self._player.position)
+            if hit is None:
+                return
+            clip_id = self.project.main[hit[0]].id
+        before = {c.id for lane in self.project.audio for c in lane}
+        project = model.detach_audio(self.project, clip_id)
+        if project != self.project:
+            self._apply(project)
+            # Выделить появившийся звуковой клип — с ним обычно дальше и работают
+            self.select(next(c.id for lane in project.audio for c in lane if c.id not in before))
+
+    @Slot(str, int, int)
+    def moveAudio(self, clip_id: str, start: int, lane: int) -> None:
+        if self.project.audio_clip(clip_id) is not None:
+            self._apply(
+                model.move_audio(self.project, clip_id, start, lane), position=max(0, start)
+            )
 
     @Slot()
     def deleteAtPlayhead(self) -> None:
@@ -227,8 +286,11 @@ class Session(QObject):
         if not self._has(self._selected):
             self.deleteAtPlayhead()
             return
-        index = self.project.index_of(self._selected)
-        start = self.project.clip_start(index)
+        found = self.project.audio_clip(self._selected)
+        if found is not None:
+            start = found[1].start
+        else:
+            start = self.project.clip_start(self.project.index_of(self._selected))
         self._apply(model.delete(self.project, self._selected), position=start)
 
     @Slot(str)
@@ -239,6 +301,10 @@ class Session(QObject):
 
     @Slot(str, int)
     def trimStart(self, clip_id: str, in_frame: int) -> None:
+        if self.project.audio_clip(clip_id) is not None:
+            project = model.trim_audio_start(self.project, clip_id, in_frame)
+            self._apply(project, position=project.audio_clip(clip_id)[1].start)  # type: ignore[index]
+            return
         if self._has(clip_id):
             index = self.project.index_of(clip_id)
             # Начало клипа на таймлайне не двигается — плейхед ставим на него
@@ -247,6 +313,10 @@ class Session(QObject):
 
     @Slot(str, int)
     def trimEnd(self, clip_id: str, out_frame: int) -> None:
+        if self.project.audio_clip(clip_id) is not None:
+            project = model.trim_audio_end(self.project, clip_id, out_frame)
+            self._apply(project, position=project.audio_clip(clip_id)[1].end - 1)  # type: ignore[index]
+            return
         if self._has(clip_id):
             project = model.trim_end(self.project, clip_id, out_frame)
             index = project.index_of(clip_id)
@@ -255,7 +325,7 @@ class Session(QObject):
 
     @Slot(str, int)
     def moveClip(self, clip_id: str, to_index: int) -> None:
-        if self._has(clip_id):
+        if self._is_main(clip_id):
             project = model.move(self.project, clip_id, to_index)
             self._apply(project, position=project.clip_start(project.index_of(clip_id)))
 
@@ -286,7 +356,10 @@ class Session(QObject):
         except (OSError, io.ProjectFormatError) as e:
             self._set_status(f"Не удалось открыть проект: {e}")
             return False
-        missing = sorted({Path(c.source).name for c in project.main if not Path(c.source).exists()})
+        sources = {c.source for c in project.main} | {
+            c.source for lane in project.audio for c in lane
+        }
+        missing = sorted(Path(s).name for s in sources if not Path(s).exists())
         if missing:
             self._set_status("Нет исходных файлов: " + ", ".join(missing))
             return False
@@ -296,6 +369,8 @@ class Session(QObject):
             info = probe(source)
             self._start_proxy(source, info.width, info.height, info.length)
             self._start_wave(source)
+        for source in dict.fromkeys(c.source for lane in project.audio for c in lane):
+            self._start_wave(source)  # звуковым клипам прокси не нужен
         return True
 
     @Slot()
@@ -334,7 +409,7 @@ class Session(QObject):
         project = self.project
         if project == self._saved and not force:
             return
-        if not project.main and self._path is None:
+        if not project.main and not project.audio and self._path is None:
             return  # пустой новый проект черновиком не нужен
         if self._path is None:
             self.drafts_dir.mkdir(parents=True, exist_ok=True)
@@ -376,8 +451,11 @@ class Session(QObject):
     def _remember(self, path: Path) -> None:
         self._state.set("last", str(path))
 
-    def _has(self, clip_id: str) -> bool:
+    def _is_main(self, clip_id: str) -> bool:
         return any(c.id == clip_id for c in self.project.main)
+
+    def _has(self, clip_id: str) -> bool:
+        return self._is_main(clip_id) or self.project.audio_clip(clip_id) is not None
 
     def _apply(self, project: Project, position: int | None = None) -> None:
         before = self._history.current
@@ -393,7 +471,7 @@ class Session(QObject):
         # не должна откладывать сохранение
         if project != self._saved and not self._autosave.isActive():
             self._autosave.start()
-        if not project.main:
+        if not project.main and not project.audio:
             self._player.clear()
             if self._selected:
                 self._selected = ""

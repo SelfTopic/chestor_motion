@@ -9,8 +9,14 @@ sudo pacman -S --needed mlt pyside6 ffmpeg libva-utils
 sudo pacman -S --needed --asdeps sox movit
 poetry install
 git config core.hooksPath .githooks
-poetry run chestor-motion
+poetry run chestor-motion                  # прошлый проект
+poetry run chestor-motion video.mp4        # новый проект с этим видео
+poetry run chestor-motion project.cmproj   # открыть проект
 ```
+
+## Управление
+
+Все клавиши и действия мышью — в самой программе: **F1** или кнопка «?» в правом верхнем углу.
 
 ## Документация
 

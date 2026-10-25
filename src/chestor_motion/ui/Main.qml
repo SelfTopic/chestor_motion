@@ -29,24 +29,87 @@ ApplicationWindow {
     minimumWidth: 720
     minimumHeight: 480
     visible: true
-    title: session.title ? session.title + " — chestor_motion" : "chestor_motion"
+    title: session.title + " — chestor_motion"
     color: bg
 
-    Shortcut { sequence: "Space"; onActivated: player.togglePlay() }
-    Shortcut { sequence: "Left"; onActivated: player.step(-1) }
-    Shortcut { sequence: "Right"; onActivated: player.step(1) }
-    Shortcut { sequence: "Shift+Left"; onActivated: player.step(-player.fps) }
-    Shortcut { sequence: "Shift+Right"; onActivated: player.step(player.fps) }
-    Shortcut { sequence: "Home"; onActivated: player.seek(0) }
-    Shortcut { sequence: "End"; onActivated: player.seek(player.length - 1) }
-    Shortcut { sequences: [StandardKey.Open]; onActivated: fileDialog.open() }
-    Shortcut { sequence: "S"; onActivated: session.splitAtPlayhead() }
-    Shortcut { sequences: [StandardKey.Delete, "Backspace"]; onActivated: session.deleteSelectedOrAtPlayhead() }
-    Shortcut { sequence: "Escape"; onActivated: session.select("") }
-    Shortcut { sequence: "Ctrl+Z"; onActivated: session.undo() }
-    // Явно, а не StandardKey.Redo: в KDE он уже Ctrl+Shift+Z, и дубль делает сочетание
-    // неоднозначным — тогда Qt не вызывает ни один из ярлыков
-    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; onActivated: session.redo() }
+    // Все клавиши и действия мышью — один список: из него создаются горячие клавиши и
+    // панель справки (F1), так справка не разъезжается с тем, что работает на самом деле.
+    // keys пустой — действие мышью, только для справки.
+    readonly property var hotkeys: [
+        { group: "Воспроизведение", keys: ["Space"], label: "Пробел",
+          text: "Воспроизвести / пауза", action: () => player.togglePlay() },
+        { group: "Воспроизведение", keys: ["Left"], label: "←",
+          text: "На кадр назад", action: () => player.step(-1) },
+        { group: "Воспроизведение", keys: ["Right"], label: "→",
+          text: "На кадр вперёд", action: () => player.step(1) },
+        { group: "Воспроизведение", keys: ["Shift+Left"], label: "Shift+←",
+          text: "На секунду назад", action: () => player.step(-player.fps) },
+        { group: "Воспроизведение", keys: ["Shift+Right"], label: "Shift+→",
+          text: "На секунду вперёд", action: () => player.step(player.fps) },
+        { group: "Воспроизведение", keys: ["Home"], label: "Home",
+          text: "В начало", action: () => player.seek(0) },
+        { group: "Воспроизведение", keys: ["End"], label: "End",
+          text: "В конец", action: () => player.seek(player.length - 1) },
+
+        { group: "Монтаж", keys: ["S"], label: "S",
+          text: "Разрезать клип под плейхедом", action: () => session.splitAtPlayhead() },
+        { group: "Монтаж", keys: ["Delete", "Backspace"], label: "Delete",
+          text: "Удалить выделенный клип, а если ничего не выделено — клип под плейхедом",
+          action: () => session.deleteSelectedOrAtPlayhead() },
+        { group: "Монтаж", keys: ["Escape"], label: "Esc",
+          text: "Снять выделение", action: () => session.select("") },
+        { group: "Монтаж", keys: ["Ctrl+Z"], label: "Ctrl+Z",
+          text: "Отменить", action: () => session.undo() },
+        // Явно, а не StandardKey.Redo: в KDE он уже Ctrl+Shift+Z, и дубль делает сочетание
+        // неоднозначным — тогда Qt не вызывает ни один из ярлыков
+        { group: "Монтаж", keys: ["Ctrl+Shift+Z", "Ctrl+Y"], label: "Ctrl+Shift+Z",
+          text: "Повторить", action: () => session.redo() },
+
+        { group: "Таймлайн", keys: [], label: "Клик по клипу",
+          text: "Выделить клип и перемотать в это место" },
+        { group: "Таймлайн", keys: [], label: "Тянуть клип",
+          text: "Переставить клип, остальные сдвинутся встык" },
+        { group: "Таймлайн", keys: [], label: "Белые ручки",
+          text: "Подрезать начало или конец выделенного клипа" },
+        { group: "Таймлайн", keys: [], label: "Клик по линейке",
+          text: "Перемотать; головку плейхеда можно тянуть" },
+        { group: "Таймлайн", keys: [], label: "Ctrl+колесо",
+          text: "Масштаб вокруг курсора" },
+        { group: "Таймлайн", keys: [], label: "Колесо",
+          text: "Прокрутка; при увеличении снизу есть ползунок" },
+
+        // Импорт — Ctrl+I, как в CapCut; Ctrl+O открывает проект
+        { group: "Проект", keys: ["Ctrl+I"], label: "Ctrl+I",
+          text: "Импорт видео (или перетащи файлы в окно)", action: () => fileDialog.open() },
+        { group: "Проект", keys: ["Ctrl+N"], label: "Ctrl+N",
+          text: "Новый проект", action: () => session.newProject() },
+        { group: "Проект", keys: ["Ctrl+O"], label: "Ctrl+O",
+          text: "Открыть проект", action: () => openProjectDialog.open() },
+        { group: "Проект", keys: ["Ctrl+S"], label: "Ctrl+S",
+          text: "Сохранить сейчас (и так сохраняется само)", action: () => session.save() },
+        { group: "Проект", keys: ["Ctrl+Shift+S"], label: "Ctrl+Shift+S",
+          text: "Сохранить как…", action: () => saveAsDialog.open() },
+        { group: "Проект", keys: ["F1"], label: "F1",
+          text: "Эта справка", action: () => hotkeysPanel.visible ? hotkeysPanel.close() : hotkeysPanel.open() },
+    ]
+
+    Repeater {
+        model: root.hotkeys.filter(h => h.keys.length > 0)
+        // Shortcut ищет окно через родительский элемент — поэтому обёртка Item
+        delegate: Item {
+            required property var modelData
+            Shortcut {
+                sequences: modelData.keys
+                onActivated: modelData.action()
+            }
+        }
+    }
+
+    HotkeysPanel {
+        id: hotkeysPanel
+        objectName: "hotkeysPanel"
+        hotkeys: root.hotkeys
+    }
 
     FileDialog {
         id: fileDialog
@@ -54,6 +117,47 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Видео (*.mp4 *.mkv *.mov *.webm *.avi)", "Все файлы (*)"]
         onAccepted: session.importUrls(selectedFiles)
+    }
+
+    FileDialog {
+        id: openProjectDialog
+        title: "Открыть проект"
+        nameFilters: ["Проект chestor_motion (*.cmproj)"]
+        onAccepted: session.openProject(selectedFile)
+    }
+
+    FileDialog {
+        id: saveAsDialog
+        title: "Сохранить проект как"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "cmproj"
+        nameFilters: ["Проект chestor_motion (*.cmproj)"]
+        onAccepted: session.saveAs(selectedFile)
+    }
+
+    // Встроенный компонент не видит id файла (root) — цвета прямо здесь
+    component MenuEntry: MenuItem {
+        id: entry
+        property string shortcutText: ""
+        implicitWidth: 260
+        implicitHeight: 34
+        contentItem: RowLayout {
+            Text {
+                text: entry.text
+                color: "#f2f2f4"
+                font.pixelSize: 14
+                Layout.fillWidth: true
+            }
+            Text {
+                text: entry.shortcutText
+                color: "#8a8a93"
+                font.pixelSize: 12
+            }
+        }
+        background: Rectangle {
+            color: entry.highlighted ? "#2a2a33" : "transparent"
+            radius: 6
+        }
     }
 
     header: Rectangle {
@@ -86,13 +190,48 @@ ApplicationWindow {
                 }
             }
 
-            Text {
-                text: session.title
-                color: root.textMain
-                font.pixelSize: 14
-                elide: Text.ElideMiddle
-                Layout.fillWidth: true
+            // Меню проекта: имя проекта и есть кнопка, как в CapCut
+            Button {
+                id: projectButton
+                objectName: "projectButton"
+                Layout.maximumWidth: 420
+                onClicked: projectMenu.open()
+                ToolTip.visible: hovered && session.projectPath !== ""
+                ToolTip.text: session.projectPath
+                ToolTip.delay: 600
+                contentItem: Text {
+                    text: session.title + "  ▾"
+                    color: root.textMain
+                    font.pixelSize: 14
+                    elide: Text.ElideMiddle
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitHeight: 34
+                    radius: 8
+                    color: projectButton.down || projectMenu.visible ? "#2a2a33"
+                         : projectButton.hovered ? "#222228" : "transparent"
+                }
+
+                Menu {
+                    id: projectMenu
+                    objectName: "projectMenu"
+                    y: projectButton.height + 4
+                    padding: 6
+                    background: Rectangle {
+                        implicitWidth: 260
+                        color: root.panel
+                        border.color: "#2c2c33"
+                        radius: 10
+                    }
+                    MenuEntry { text: "Новый проект"; shortcutText: "Ctrl+N"; onTriggered: session.newProject() }
+                    MenuEntry { text: "Открыть…"; shortcutText: "Ctrl+O"; onTriggered: openProjectDialog.open() }
+                    MenuEntry { text: "Сохранить"; shortcutText: "Ctrl+S"; onTriggered: session.save() }
+                    MenuEntry { text: "Сохранить как…"; shortcutText: "Ctrl+Shift+S"; onTriggered: saveAsDialog.open() }
+                }
             }
+
+            Item { Layout.fillWidth: true }
 
             Text {
                 visible: session.status !== ""
@@ -101,6 +240,30 @@ ApplicationWindow {
                       : session.status
                 color: root.textDim
                 font.pixelSize: 13
+            }
+
+            Button {
+                id: helpButton
+                objectName: "helpButton"
+                onClicked: hotkeysPanel.open()
+                ToolTip.visible: hovered
+                ToolTip.text: "Клавиши и управление (F1)"
+                ToolTip.delay: 400
+                contentItem: Text {
+                    text: "?"
+                    color: root.textMain
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitWidth: 34
+                    implicitHeight: 34
+                    radius: 17
+                    color: helpButton.down ? "#2a2a33" : helpButton.hovered ? "#222228" : "transparent"
+                    border.color: "#3a3a44"
+                }
             }
         }
     }
@@ -138,7 +301,7 @@ ApplicationWindow {
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "или нажми «Импорт» (Ctrl+O)"
+                    text: "или нажми «Импорт» (Ctrl+I)"
                     color: root.textDim
                     font.pixelSize: 14
                 }

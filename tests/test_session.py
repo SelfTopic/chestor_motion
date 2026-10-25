@@ -1,9 +1,11 @@
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QEventLoop, QTimer, QUrl
 from PySide6.QtTest import QTest
 
 from chestor_motion.engine.player import Player
+from chestor_motion.project import io
 from chestor_motion.session import Session, preview_size
 from tests.conftest import SILENT_AUDIO_OUT
 
@@ -19,7 +21,7 @@ def _wait_proxies(session: Session) -> None:
 
 def _session(tmp_path: Path) -> tuple[Session, Player]:
     player = Player(SILENT_AUDIO_OUT)
-    return Session(player, cache_dir=tmp_path / "proxies"), player
+    return Session(player, cache_dir=tmp_path / "proxies", data_dir=tmp_path / "data"), player
 
 
 def test_preview_size_fits_960() -> None:
@@ -131,3 +133,93 @@ def test_close_cancels_background_jobs(qapp, clip: Path, tmp_path: Path) -> None
     player.shutdown()
     QTest.qWait(1500)  # дольше, чем делается прокси для 2-секундного ролика
     assert not list((tmp_path / "proxies").glob("*.mp4"))
+
+
+def test_first_edit_autosaves_a_draft(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        assert session.title == "Новый проект" and session.projectPath == ""
+        session.import_path(clip)
+        QTest.qWait(1800)  # AUTOSAVE_MS + запас
+        drafts = list((tmp_path / "data" / "drafts").glob("*.cmproj"))
+        assert len(drafts) == 1 and session.projectPath == str(drafts[0])
+        assert session.title.startswith("Черновик")
+        assert io.load(drafts[0]) == session.project
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_empty_new_project_is_not_saved(qapp, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    session.close()
+    player.shutdown()
+    assert not (tmp_path / "data" / "drafts").exists()
+
+
+def test_save_as_then_autosave_goes_there(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        target = tmp_path / "my" / "shorts"
+        session.save_as(target)  # расширение допишется
+        saved = target.with_name("shorts.cmproj")
+        assert session.projectPath == str(saved) and session.title == "shorts"
+        player.seek(20)
+        session.splitAtPlayhead()
+        session.flush()
+        assert len(io.load(saved).main) == 2
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_close_flushes_pending_edits(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    session.import_path(clip)
+    session.save_as(tmp_path / "p.cmproj")
+    player.seek(20)
+    session.splitAtPlayhead()  # автосохранение ещё не сработало
+    session.close()
+    player.shutdown()
+    assert len(io.load(tmp_path / "p.cmproj").main) == 2
+
+
+def test_open_and_restore_last(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    session.import_path(clip)
+    player.seek(20)
+    session.splitAtPlayhead()
+    session.save_as(tmp_path / "p.cmproj")
+    session.close()
+    player.shutdown()
+
+    session, player = _session(tmp_path)  # «перезапуск программы»
+    try:
+        assert session.restore_last()
+        assert len(session.project.main) == 2 and session.title == "p"
+        assert player.length == session.project.length
+        assert not session.canUndo  # история начинается с открытия
+        session.newProject()
+        assert not session.project.main and session.projectPath == ""
+        assert session.open_project(tmp_path / "p.cmproj")
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_open_with_missing_source_refuses(qapp, clip: Path, tmp_path: Path) -> None:
+    moved = tmp_path / "moved.mp4"
+    shutil.copy(clip, moved)
+    session, player = _session(tmp_path)
+    session.import_path(moved)
+    session.save_as(tmp_path / "p.cmproj")
+    session.newProject()
+    moved.unlink()
+    try:
+        assert not session.open_project(tmp_path / "p.cmproj")
+        assert "moved.mp4" in session.status
+        assert not session.project.main
+    finally:
+        session.close()
+        player.shutdown()

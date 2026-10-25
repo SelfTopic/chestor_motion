@@ -4,13 +4,15 @@
 from pathlib import Path
 
 import mlt7 as mlt
-from PySide6.QtCore import Property, QObject, QSize, Qt, Signal, Slot
+from PySide6.QtCore import Property, QObject, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat, QVideoSink
 
 from chestor_motion.engine import mltlib
 from chestor_motion.qt import qproperty
 
 FPS = 30
+# Если кадр после перемотки так и не пришёл (например, тот же самый кадр), не ждём вечно
+SEEK_TIMEOUT_MS = 250
 
 
 def _even(n: int) -> int:
@@ -63,6 +65,16 @@ class Player(QObject):
         self._playing = False
         self._width = 0
         self._height = 0
+        # Перемотка не перебивает кадр, который ещё декодируется: иначе при таскании ползунка
+        # (особенно назад — там каждый кадр декодируется от ключевого) каждый seek выбрасывает
+        # недоделанный кадр и картинка стоит до остановки мыши. Пока кадр в пути — запоминаем
+        # последнюю цель и едем к ней, когда он покажется.
+        self._seek_in_flight: int | None = None
+        self._seek_queued: int | None = None
+        self._seek_timeout = QTimer(self)
+        self._seek_timeout.setSingleShot(True)
+        self._seek_timeout.setInterval(SEEK_TIMEOUT_MS)
+        self._seek_timeout.timeout.connect(self._finish_seek)
         self._frameShown.connect(self._on_frame_shown, Qt.ConnectionType.QueuedConnection)
 
     # --- свойства для QML ---
@@ -164,9 +176,8 @@ class Player(QObject):
         if not self._producer_ptr:
             return
         mltlib.producer_set_speed(self._producer_ptr, 0)
-        mltlib.producer_seek(self._producer_ptr, self._position)
-        mltlib.consumer_purge(self._consumer_ptr)
-        self._refresh()
+        self._seek_queued = None
+        self._start_seek(self._position)
         self._set_playing(False)
 
     @Slot()
@@ -178,10 +189,11 @@ class Player(QObject):
         if not self._producer_ptr:
             return
         frame = max(0, min(frame, self._length - 1))
-        mltlib.producer_seek(self._producer_ptr, frame)
-        mltlib.consumer_purge(self._consumer_ptr)
-        self._refresh()
         self._set_position(frame)
+        if self._seek_in_flight is None:
+            self._start_seek(frame)
+        else:
+            self._seek_queued = frame
 
     @Slot(int)
     def step(self, frames: int) -> None:
@@ -193,6 +205,20 @@ class Player(QObject):
         self._close()
 
     # --- внутреннее ---
+
+    def _start_seek(self, frame: int) -> None:
+        mltlib.producer_seek(self._producer_ptr, frame)
+        mltlib.consumer_purge(self._consumer_ptr)
+        self._refresh()
+        self._seek_in_flight = frame
+        self._seek_timeout.start()
+
+    def _finish_seek(self) -> None:
+        self._seek_timeout.stop()
+        self._seek_in_flight = None
+        queued, self._seek_queued = self._seek_queued, None
+        if queued is not None and self._producer_ptr:
+            self._start_seek(queued)
 
     def _refresh(self) -> None:
         if self._consumer_ptr:
@@ -219,6 +245,8 @@ class Player(QObject):
         self._profile = None
         self._subscription = None
         self._producer_ptr = self._consumer_ptr = 0
+        self._seek_timeout.stop()
+        self._seek_in_flight = self._seek_queued = None
         self._length = 0
         self._set_playing(False)
 
@@ -234,7 +262,10 @@ class Player(QObject):
     def _on_frame_shown(self, frame: QVideoFrame, position: int) -> None:
         if self._sink is not None:
             self._sink.setVideoFrame(frame)
-        if self._playing:
+        if self._seek_in_flight is not None and position == self._seek_in_flight:
+            self._finish_seek()
+        seeking = self._seek_in_flight is not None or self._seek_queued is not None
+        if self._playing and not seeking:
             self._set_position(position)
             if position >= self._length - 1:
                 self.pause()

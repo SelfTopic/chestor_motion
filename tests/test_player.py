@@ -102,3 +102,33 @@ def test_picture_follows_scrubber_on_pause(qapp, clip: Path) -> None:
         assert len(set(shown)) > 15, "картинка должна обновляться и по ходу перетаскивания"
     finally:
         player.shutdown()
+
+
+def test_picture_follows_fast_backward_scrub(qapp, clip: Path) -> None:
+    # Назад каждый кадр декодируется от ключевого; если каждый seek выбрасывает кадр в пути,
+    # картинка стоит до остановки мыши. Мышь 125 Гц, шаг 2 кадра назад.
+    player = Player(SILENT_AUDIO_OUT)
+    shown: list[int] = []
+    player._frameShown.connect(lambda _frame, pos: shown.append(pos))
+    player.load(clip, player.length - 1 if player.length else 59)
+    target = {"pos": 59, "moves": 0}
+
+    def tick() -> None:
+        target["moves"] += 1
+        target["pos"] = max(0, target["pos"] - 2)
+        player.seek(target["pos"])
+        if target["moves"] < 60:
+            QTimer.singleShot(8, tick)
+        else:
+            target["shown_while_moving"] = len(set(shown))
+
+    try:
+        _wait(300)
+        shown.clear()
+        tick()
+        _wait(8 * 60 + 500)
+        # новый код показывает 13–15 кадров, без пропуска seek-ов в пути — 4–9
+        assert target["shown_while_moving"] >= 11, "картинка должна обновляться во время движения"
+        assert shown[-1] == 0
+    finally:
+        player.shutdown()

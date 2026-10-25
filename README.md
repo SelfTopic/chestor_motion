@@ -11,3 +11,8 @@ poetry install
 git config core.hooksPath .githooks
 poetry run chestor-motion
 ```
+
+## Документация
+
+- [План](docs/roadmap.md) — этапы от прототипа до функций уровня CapCut
+- [Журнал решений](docs/decisions.md) — почему сделано именно так и что проверяли

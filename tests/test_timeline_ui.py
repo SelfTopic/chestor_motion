@@ -148,3 +148,18 @@ def test_delete_selected_and_undo(ui: Ui) -> None:
     QTest.keyClick(ui.win, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     QTest.qWait(50)
     assert ui.session.clips[0]["id"] == first["id"]
+
+
+def test_scrollbar_appears_on_zoom_and_scrolls(ui: Ui) -> None:
+    bar = ui.tl.findChild(QQuickItem, "timelineScrollBar")
+    assert bar is not None
+    assert float(bar.property("size")) >= 0.999  # всё помещается — прокручивать нечего
+    for _ in range(6):
+        ui.wheel(ui.x(10), ui.track_y(), 120, Qt.KeyboardModifier.ControlModifier)
+    assert float(bar.property("size")) < 0.5 and bar.isVisible()
+    handle = bar.property("contentItem")
+    assert handle.width() > 0 and handle.isVisible()
+    before = float(ui.flick.property("contentX"))
+    centre = handle.mapToScene(QPointF(handle.width() / 2, handle.height() / 2))
+    ui.drag(centre.x(), centre.y(), centre.x() + 200)
+    assert float(ui.flick.property("contentX")) > before + 100

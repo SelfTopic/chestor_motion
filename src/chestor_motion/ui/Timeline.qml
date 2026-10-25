@@ -58,7 +58,7 @@ Rectangle {
 
     color: "#141417"
     radius: 12
-    implicitHeight: trackTop + trackHeight + 20
+    implicitHeight: trackTop + trackHeight + 26  // снизу место под ползунок прокрутки
 
     onWidthChanged: if (!userZoomed) fit()
 
@@ -111,9 +111,30 @@ Rectangle {
         interactive: false
         boundsBehavior: Flickable.StopAtBounds
 
+        // Ползунок прокрутки: виден всегда, когда проект не помещается целиком. В стиле Basic
+        // он по умолчанию прозрачный, пока не наведёшь мышь, — поэтому свой вид.
         ScrollBar.horizontal: ScrollBar {
-            policy: ScrollBar.AsNeeded
-            height: 8
+            id: hbar
+            objectName: "timelineScrollBar"
+            policy: flick.contentWidth > flick.width + 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            height: 12
+            leftPadding: timeline.pad
+            rightPadding: timeline.pad
+            topPadding: 2
+            bottomPadding: 2
+            background: Rectangle {
+                x: hbar.leftPadding
+                width: hbar.availableWidth
+                y: hbar.topPadding
+                height: hbar.availableHeight
+                radius: height / 2
+                color: "#202026"
+            }
+            contentItem: Rectangle {
+                implicitHeight: 8
+                radius: height / 2
+                color: hbar.pressed ? timeline.accent : (hbar.hovered ? "#7a7a85" : "#55555f")
+            }
         }
 
         // Клик и протяжка по пустому месту и линейке — перемотка

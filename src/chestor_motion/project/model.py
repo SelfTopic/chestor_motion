@@ -4,6 +4,10 @@
 поэтому отмена действий это просто стопка снимков (project/history.py).
 
 Время — целые кадры проекта (FPS). Интервалы полуоткрытые: [in_frame, out_frame).
+
+Дорожки: основная — видео «на магните» (клипы встык); звуковые — клипы в любом месте
+таймлайна, с пустотами. Звуковые клипы раскладываются по дорожкам так, чтобы в одной не было
+пересечений: не влез в свою — встаёт в следующую, нет свободной — появляется новая.
 """
 
 import uuid
@@ -23,17 +27,48 @@ class Clip:
     in_frame: int  # первый используемый кадр исходника
     out_frame: int  # кадр исходника сразу после последнего используемого
     id: str = field(default_factory=new_id)
+    audio: bool = True  # играет свой звук; после «отделить звук» — нет
 
     def __post_init__(self) -> None:
-        if not 0 <= self.in_frame < self.out_frame <= self.source_length:
-            raise ValueError(
-                f"клип {self.id}: нужно 0 <= in < out <= length, "
-                f"а дано {self.in_frame}, {self.out_frame}, {self.source_length}"
-            )
+        _check_range(self.id, self.in_frame, self.out_frame, self.source_length)
 
     @property
     def length(self) -> int:
         return self.out_frame - self.in_frame
+
+
+@dataclass(frozen=True)
+class AudioClip:
+    source: str
+    source_length: int
+    in_frame: int
+    out_frame: int
+    start: int  # кадр таймлайна, где начинается клип
+    id: str = field(default_factory=new_id)
+
+    def __post_init__(self) -> None:
+        _check_range(self.id, self.in_frame, self.out_frame, self.source_length)
+        if self.start < 0:
+            raise ValueError(f"звуковой клип {self.id}: start {self.start} < 0")
+
+    @property
+    def length(self) -> int:
+        return self.out_frame - self.in_frame
+
+    @property
+    def end(self) -> int:
+        return self.start + self.length
+
+
+def _check_range(clip_id: str, in_frame: int, out_frame: int, source_length: int) -> None:
+    if not 0 <= in_frame < out_frame <= source_length:
+        raise ValueError(
+            f"клип {clip_id}: нужно 0 <= in < out <= length, "
+            f"а дано {in_frame}, {out_frame}, {source_length}"
+        )
+
+
+Lane = tuple[AudioClip, ...]
 
 
 @dataclass(frozen=True)
@@ -43,10 +78,33 @@ class Project:
     # Основная дорожка «на магните», как в CapCut: клипы идут встык, дыр не бывает,
     # поэтому позиция клипа — сумма длин предыдущих
     main: tuple[Clip, ...] = ()
+    # Звуковые дорожки сверху вниз; в каждой клипы по порядку start и не пересекаются
+    audio: tuple[Lane, ...] = ()
+
+    @property
+    def main_length(self) -> int:
+        return sum(c.length for c in self.main)
 
     @property
     def length(self) -> int:
-        return sum(c.length for c in self.main)
+        """Длина проекта: до конца основной дорожки или последнего звукового клипа."""
+        ends = [c.end for lane in self.audio for c in lane]
+        return max([self.main_length, *ends])
+
+    def audio_clip(self, clip_id: str) -> tuple[int, AudioClip] | None:
+        """(номер дорожки, клип) или None, если это не звуковой клип."""
+        for lane_index, lane in enumerate(self.audio):
+            for clip in lane:
+                if clip.id == clip_id:
+                    return lane_index, clip
+        return None
+
+    def audio_at(self, frame: int, lane: int) -> AudioClip | None:
+        if 0 <= lane < len(self.audio):
+            for clip in self.audio[lane]:
+                if clip.start <= frame < clip.end:
+                    return clip
+        return None
 
     def clip_start(self, index: int) -> int:
         return sum(c.length for c in self.main[:index])
@@ -93,6 +151,9 @@ def split(project: Project, frame: int) -> Project:
 
 
 def delete(project: Project, clip_id: str) -> Project:
+    """Удалить клип любой дорожки."""
+    if project.audio_clip(clip_id) is not None:
+        return replace(project, audio=_without(project.audio, clip_id))
     index = project.index_of(clip_id)
     return replace(project, main=project.main[:index] + project.main[index + 1 :])
 
@@ -121,3 +182,127 @@ def trim_end(project: Project, clip_id: str, out_frame: int) -> Project:
 
 def _replace_clip(project: Project, index: int, clip: Clip) -> Project:
     return replace(project, main=project.main[:index] + (clip,) + project.main[index + 1 :])
+
+
+# --- звук ---
+
+
+def _without(lanes: tuple[Lane, ...], clip_id: str, compact: bool = True) -> tuple[Lane, ...]:
+    """Дорожки без клипа; опустевшие дорожки убираются (compact)."""
+    out = tuple(tuple(c for c in lane if c.id != clip_id) for lane in lanes)
+    return tuple(lane for lane in out if lane) if compact else out
+
+
+def _fits(lane: Lane, clip: AudioClip) -> bool:
+    return all(clip.end <= c.start or clip.start >= c.end for c in lane)
+
+
+def _place(lanes: tuple[Lane, ...], clip: AudioClip, preferred: int = 0) -> tuple[Lane, ...]:
+    """Поставить клип в первую дорожку от preferred, где он ни с чем не пересекается."""
+    order = list(range(preferred, len(lanes))) + list(range(0, min(preferred, len(lanes))))
+    for i in order:
+        if _fits(lanes[i], clip):
+            lane = tuple(sorted((*lanes[i], clip), key=lambda c: c.start))
+            return lanes[:i] + (lane,) + lanes[i + 1 :]
+    return (*lanes, (clip,))
+
+
+def add_audio(project: Project, clip: AudioClip, lane: int = 0) -> Project:
+    return replace(project, audio=_place(project.audio, clip, lane))
+
+
+def detach_audio(project: Project, clip_id: str) -> Project:
+    """«Отделить звук»: видеоклип замолкает, его звук — отдельный клип на том же месте."""
+    index = project.index_of(clip_id)
+    clip = project.main[index]
+    if not clip.audio:
+        return project
+    sound = AudioClip(
+        source=clip.source,
+        source_length=clip.source_length,
+        in_frame=clip.in_frame,
+        out_frame=clip.out_frame,
+        start=project.clip_start(index),
+    )
+    project = _replace_clip(project, index, replace(clip, audio=False))
+    return add_audio(project, sound)
+
+
+def move_audio(project: Project, clip_id: str, start: int, lane: int | None = None) -> Project:
+    """Передвинуть звуковой клип; занято — встанет в другую дорожку."""
+    found = project.audio_clip(clip_id)
+    if found is None:
+        return project
+    current_lane, clip = found
+    # Пустую дорожку убираем только после перестановки: иначе клип, один в своей дорожке,
+    # при сдвиге вбок перепрыгивал бы в верхнюю
+    lanes = _without(project.audio, clip_id, compact=False)
+    preferred = max(0, min(current_lane if lane is None else lane, len(lanes)))
+    placed = _place(lanes, replace(clip, start=max(0, start)), preferred)
+    return replace(project, audio=tuple(lane for lane in placed if lane))
+
+
+def _neighbours(project: Project, clip_id: str) -> tuple[int, int | None]:
+    """Конец соседа слева и начало соседа справа в той же дорожке (None — справа никого)."""
+    found = project.audio_clip(clip_id)
+    assert found is not None
+    lane_index, clip = found
+    lane = project.audio[lane_index]
+    left = max((c.end for c in lane if c.end <= clip.start and c.id != clip_id), default=0)
+    right = min((c.start for c in lane if c.start >= clip.end and c.id != clip_id), default=None)
+    return left, right
+
+
+def trim_audio_start(project: Project, clip_id: str, in_frame: int) -> Project:
+    """Подрезать начало: левый край клипа на таймлайне двигается вместе с in."""
+    found = project.audio_clip(clip_id)
+    if found is None:
+        return project
+    lane_index, clip = found
+    left, _ = _neighbours(project, clip_id)
+    lowest = max(0, clip.in_frame - (clip.start - left))  # не залезть на соседа и в минус
+    in_frame = max(lowest, min(in_frame, clip.out_frame - 1))
+    moved = replace(clip, in_frame=in_frame, start=clip.start + in_frame - clip.in_frame)
+    return _replace_audio(project, lane_index, moved)
+
+
+def trim_audio_end(project: Project, clip_id: str, out_frame: int) -> Project:
+    found = project.audio_clip(clip_id)
+    if found is None:
+        return project
+    lane_index, clip = found
+    _, right = _neighbours(project, clip_id)
+    highest = (
+        clip.source_length
+        if right is None
+        else min(clip.source_length, clip.out_frame + right - clip.end)
+    )
+    out_frame = max(clip.in_frame + 1, min(out_frame, highest))
+    return _replace_audio(project, lane_index, replace(clip, out_frame=out_frame))
+
+
+def split_audio(project: Project, clip_id: str, frame: int) -> Project:
+    """Разрезать звуковой клип в кадре таймлайна; не внутри клипа — без изменений."""
+    found = project.audio_clip(clip_id)
+    if found is None:
+        return project
+    lane_index, clip = found
+    if not clip.start < frame < clip.end:
+        return project
+    cut = clip.in_frame + frame - clip.start
+    left = replace(clip, out_frame=cut)
+    right = replace(clip, in_frame=cut, start=frame, id=new_id())
+    lane = tuple(
+        sorted((*(c for c in project.audio[lane_index] if c.id != clip_id), left, right),
+               key=lambda c: c.start)
+    )  # fmt: skip
+    return replace(
+        project, audio=project.audio[:lane_index] + (lane,) + project.audio[lane_index + 1 :]
+    )
+
+
+def _replace_audio(project: Project, lane_index: int, clip: AudioClip) -> Project:
+    lane = tuple(clip if c.id == clip.id else c for c in project.audio[lane_index])
+    return replace(
+        project, audio=project.audio[:lane_index] + (lane,) + project.audio[lane_index + 1 :]
+    )

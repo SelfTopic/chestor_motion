@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -6,12 +7,19 @@ import pytest
 from chestor_motion.project import io
 from chestor_motion.project.history import History
 from chestor_motion.project.model import (
+    AudioClip,
     Clip,
     Project,
+    add_audio,
     add_clip,
     delete,
+    detach_audio,
     move,
+    move_audio,
     split,
+    split_audio,
+    trim_audio_end,
+    trim_audio_start,
     trim_end,
     trim_start,
 )
@@ -128,3 +136,83 @@ def test_load_rejects_broken(tmp_path: Path, text: str) -> None:
     path.write_text(text)
     with pytest.raises(io.ProjectFormatError):
         io.load(path)
+
+
+# --- звук ---
+
+
+def _audio(start: int, length: int = 30, id: str | None = None) -> AudioClip:
+    clip = AudioClip(source="/m.mp3", source_length=1000, in_frame=0, out_frame=length, start=start)
+    return clip if id is None else replace(clip, id=id)
+
+
+def test_detach_audio_puts_sound_under_the_clip() -> None:
+    p = _project(30, 50)
+    p = detach_audio(p, "c1")
+    assert p.main[1].audio is False and p.main[0].audio is True
+    (sound,) = p.audio[0]
+    assert (sound.start, sound.in_frame, sound.out_frame) == (30, 0, 50)
+    assert detach_audio(p, "c1") == p  # второй раз нечего отделять
+
+
+def test_audio_lanes_never_overlap() -> None:
+    p = add_audio(Project(), _audio(0, 30, "a"))
+    p = add_audio(p, _audio(10, 30, "b"))  # пересекается с a — во вторую дорожку
+    p = add_audio(p, _audio(40, 10, "c"))  # свободно в первой
+    assert [[c.id for c in lane] for lane in p.audio] == [["a", "c"], ["b"]]
+    assert p.length == 50
+
+
+def test_move_audio_and_empty_lanes_vanish() -> None:
+    p = add_audio(add_audio(Project(), _audio(0, 30, "a")), _audio(10, 30, "b"))
+    p = move_audio(p, "b", 100)  # в своей дорожке, дальше
+    assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
+    p = move_audio(p, "b", 40, lane=0)  # в первую, там свободно
+    assert [[c.id for c in lane] for lane in p.audio] == [["a", "b"]]
+    p = move_audio(p, "b", -50)  # не в минус; в 0 занято клипом a — новая дорожка
+    assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
+    assert p.audio_clip("b")[1].start == 0  # type: ignore[index]
+
+
+def test_trim_audio_respects_neighbours() -> None:
+    p = add_audio(add_audio(Project(), _audio(0, 30, "a")), _audio(40, 30, "b"))
+    p = trim_audio_end(p, "a", 500)  # упирается в b: конец a не дальше 40
+    assert p.audio_clip("a")[1].end == 40  # type: ignore[index]
+    p = trim_audio_start(p, "b", 20)  # левый край b едет вправо вместе с in
+    b = p.audio_clip("b")[1]  # type: ignore[index]
+    assert (b.in_frame, b.start, b.end) == (20, 60, 70)
+    p = trim_audio_start(p, "b", 0)  # назад — только до конца a и не в минус in
+    b = p.audio_clip("b")[1]  # type: ignore[index]
+    assert (b.in_frame, b.start) == (0, 40)
+
+
+def test_split_audio_and_delete() -> None:
+    p = add_audio(Project(), _audio(10, 30, "a"))
+    p = split_audio(p, "a", 25)
+    left, right = p.audio[0]
+    assert (left.start, left.end, right.start, right.in_frame, right.end) == (10, 25, 25, 15, 40)
+    assert split_audio(p, "a", 10) == p  # на краю — нечего резать
+    p = delete(delete(p, left.id), right.id)
+    assert p.audio == ()
+
+
+def test_split_main_keeps_detached_flag() -> None:
+    p = detach_audio(_project(100), "c0")
+    assert all(not c.audio for c in split(p, 40).main)
+
+
+def test_v1_file_is_migrated(tmp_path: Path) -> None:
+    path = tmp_path / "old.cmproj"
+    path.write_text(json.dumps({
+        "format": "chestor_motion", "version": 1, "width": 10, "height": 10,
+        "main": [{"id": "x", "source": "/a.mp4", "source_length": 9, "in": 0, "out": 9}],
+    }))  # fmt: skip
+    p = io.load(path)
+    assert p.main[0].audio is True and p.audio == ()
+
+
+def test_save_load_with_audio(tmp_path: Path) -> None:
+    p = add_audio(detach_audio(_project(100, 40), "c0"), _audio(150, 20, "music"))
+    path = tmp_path / "p.cmproj"
+    io.save(p, path)
+    assert io.load(path) == p

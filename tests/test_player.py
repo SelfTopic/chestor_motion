@@ -79,3 +79,26 @@ def test_scrubbing_does_not_deadlock(qapp, clip: Path) -> None:
         assert player.position == 19_999 * 7 % player.length
     finally:
         player.shutdown()
+
+
+def test_picture_follows_scrubber_on_pause(qapp, clip: Path) -> None:
+    # Таскание ползунка на паузе: seek каждые 16 мс, картинка обязана догнать последний
+    player = Player(SILENT_AUDIO_OUT)
+    shown: list[int] = []
+    player._frameShown.connect(lambda _frame, pos: shown.append(pos))
+    player.load(clip, 0)
+    target = {"pos": 0}
+
+    def tick() -> None:
+        target["pos"] += 1
+        player.seek(target["pos"])
+        if target["pos"] < 50:
+            QTimer.singleShot(16, tick)
+
+    try:
+        tick()
+        _wait(16 * 50 + 400)
+        assert shown[-1] == 50
+        assert len(set(shown)) > 15, "картинка должна обновляться и по ходу перетаскивания"
+    finally:
+        player.shutdown()

@@ -1,4 +1,4 @@
-"""Плеер на MLT: воспроизведение, звук и синхронизацию делает консьюмер rtaudio,
+"""Плеер на MLT: воспроизведение, звук и синхронизацию делает консьюмер sdl2_audio,
 мы только забираем показанный кадр и отдаём его в QVideoSink (масштабирует видеокарта)."""
 
 from pathlib import Path
@@ -42,8 +42,11 @@ class Player(QObject):
     playingChanged = Signal()
     videoSinkChanged = Signal()
 
-    def __init__(self, audio_out: str = "rtaudio", parent: QObject | None = None) -> None:
-        """audio_out — консьюмер MLT, который выводит звук и задаёт темп воспроизведения."""
+    def __init__(self, audio_out: str = "sdl2_audio", parent: QObject | None = None) -> None:
+        """audio_out — консьюмер MLT, который выводит звук и задаёт темп воспроизведения.
+
+        Не rtaudio: на паузе он перестаёт обновлять картинку после нескольких перемоток подряд.
+        """
         super().__init__(parent)
         mltlib.init()
         self._audio_out = audio_out

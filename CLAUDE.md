@@ -6,7 +6,7 @@
 ## Стек
 
 - Python 3.14 (системный), интерфейс — PySide6 + QML, движок — MLT 7, ffmpeg для прокси.
-- `mlt7` и `PySide6` — системные пакеты (`pacman -S mlt pyside6 rtaudio sox movit`), не pip:
+- `mlt7` и `PySide6` — системные пакеты (`pacman -S mlt pyside6 sox movit`), не pip:
   привязки mlt7 собраны под системный Python. `.venv` создаётся с system-site-packages
   (`poetry.toml`), в нём только dev-инструменты.
 - SWIG-привязки `mlt7` неполные: `Frame.get_audio` не вызывается из Python, `listen` ждёт
@@ -22,7 +22,8 @@
 
 ## Превью
 
-- Воспроизведение, звук и синхронизацию делает консьюмер MLT `rtaudio`; плеер подписан
+- Воспроизведение, звук и синхронизацию делает консьюмер MLT `sdl2_audio` (как в Kdenlive;
+  `rtaudio` на паузе перестаёт обновлять картинку после нескольких перемоток). Плеер подписан
   через `ctypes` на `consumer-frame-show`, копирует кадр в RGBA и отдаёт его в `QVideoSink`
   через сигнал с очередью (колбэк приходит из потока MLT).
 - Пауза — speed 0, перемотка — seek; после обоих `consumer_purge` + `consumer_refresh`.

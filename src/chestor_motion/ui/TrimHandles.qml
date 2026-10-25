@@ -5,7 +5,7 @@ import QtQuick
 Item {
     id: handles
 
-    required property Item clip  // ClipItem или AudioClipItem
+    required property Item clip  // ClipItem или LaneClipItem
     property bool hidden: false  // например, пока клип перетаскивают
 
     anchors.fill: parent

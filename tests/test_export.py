@@ -18,7 +18,7 @@ from chestor_motion.project.model import (
     fill_scale,
     set_canvas,
     set_transform,
-    trim_audio_end,
+    trim_free_end,
 )
 
 
@@ -79,7 +79,7 @@ def project(clip: Path, music: Path) -> Project:
     n = probe(str(clip)).length
     p = add_clip(Project(width=642, height=360), Clip(str(clip), n, 0, n, id="v"))
     p = detach_audio(p, "v")
-    p = trim_audio_end(p, p.audio[0][0].id, 30)
+    p = trim_free_end(p, p.audio[0][0].id, 30)
     m = probe(str(music)).length
     return add_audio(p, AudioClip(str(music), m, 0, 30, start=n))  # после видео ещё 1 с звука
 

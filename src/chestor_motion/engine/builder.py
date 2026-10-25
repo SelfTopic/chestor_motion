@@ -11,7 +11,15 @@ from pathlib import Path
 import mlt7 as mlt
 
 from chestor_motion.engine import mltlib
-from chestor_motion.project.model import FPS, Clip, Project, frame_rect
+from chestor_motion.project.model import (
+    FPS,
+    AudioClip,
+    Clip,
+    FreeClip,
+    OverlayClip,
+    Project,
+    frame_rect,
+)
 
 
 def make_profile(width: int, height: int, fps: int = FPS) -> mlt.Profile:
@@ -95,7 +103,7 @@ class Builder:
         for key in [k for k in self._cache if k[0] in paths]:
             del self._cache[key]
 
-    def rect(self, clip: Clip, x: float, y: float, scale: float) -> str:
+    def rect(self, clip: Clip | OverlayClip, x: float, y: float, scale: float) -> str:
         """Прямоугольник для qtblend в пикселях профиля. Только целые: дробное вроде «-0.00»
         qtblend не разбирает и молча не рисует кадр."""
         producer = self.producer(clip.source, AV if clip.audio else VIDEO_ONLY)
@@ -105,52 +113,82 @@ class Builder:
         return f"{round(left)} {round(top)} {round(w)} {round(h)} 1"
 
     def build(self, project: Project, live: str = "") -> mlt.Tractor:
-        """Дорожка 0 — основная, дальше звуковые; переходы mix складывают звук всех дорожек.
+        """Дорожка 0 — основная, над ней наложения (qtblend кладёт каждую поверх всего, что
+        ниже), дальше звуковые. Переходы mix складывают звук всех дорожек.
 
         live: id клипа, который сейчас двигают на превью, — ему фильтр положения нужен, даже
         если клип пока на месте, чтобы менять прямоугольник на лету (`tractor.transforms`)."""
         tractor = mlt.Tractor(self._profile)
-        main = mlt.Playlist(self._profile)
-        k = self._k
-        keep: list[object] = [main]
-        transforms: dict[str, mlt.Filter] = {}
-        for clip in project.main:
-            producer = self.producer(clip.source, AV if clip.audio else VIDEO_ONLY)
-            # У прокси и оригинала длина может отличаться на пару кадров (переменная
-            # частота кадров оригинала) — не выходим за конец того, что открыто
-            last = min(clip.out_frame * k, producer.get_length()) - 1
-            # В MLT out включительный, в модели — нет
-            main.append(producer, clip.in_frame * k, max(clip.in_frame * k, last))
-            # Вписанный по центру клип MLT ставит сам; qtblend на нём стоил бы 10–20% скорости
-            if clip.transformed or clip.id == live:
-                transform = mlt.Filter(self._profile, "qtblend")
-                transform.set("rect", self.rect(clip, clip.x, clip.y, clip.scale))
-                cut = main.get_clip(main.count() - 1)
-                cut.attach(transform)
-                transforms[clip.id] = transform
-                keep += [cut, transform]
-        tractor.set_track(main, 0)
+        self._keep: list[object] = []
+        self._transforms: dict[str, mlt.Filter] = {}
+        self._live = live
 
-        for index, lane in enumerate(project.audio, start=1):
-            playlist = mlt.Playlist(self._profile)
-            position = 0
-            for clip in lane:
-                if clip.start * k > position:
-                    playlist.blank(clip.start * k - position - 1)  # blank(out): длина out + 1
-                producer = self.producer(clip.source, AUDIO_ONLY)
-                last = min(clip.out_frame * k, producer.get_length()) - 1
-                playlist.append(producer, clip.in_frame * k, max(clip.in_frame * k, last))
-                position = clip.end * k
-            playlist.set("hide", 1)  # у звуковой дорожки нет картинки — видна основная
+        main = mlt.Playlist(self._profile)
+        for clip in project.main:
+            self._append(main, clip, AV if clip.audio else VIDEO_ONLY)
+        tractor.set_track(main, 0)
+        self._keep.append(main)
+
+        index = 1
+        for lane in project.overlays:
+            playlist = self._lane(
+                lane, lambda c: AV if isinstance(c, OverlayClip) and c.audio else VIDEO_ONLY
+            )
             tractor.set_track(playlist, index)
-            mix = mlt.Transition(self._profile, "mix")
-            mix.set("always_active", 1)
-            mix.set("sum", 1)
-            tractor.plant_transition(mix, 0, index)
-            keep += [playlist, mix]
+            blend = mlt.Transition(self._profile, "qtblend")
+            blend.set("always_active", 1)
+            tractor.plant_transition(blend, 0, index)
+            self._keep.append(blend)
+            self._mix(tractor, index)
+            index += 1
+        for lane in project.audio:
+            playlist = self._lane(lane, lambda _c: AUDIO_ONLY)
+            playlist.set("hide", 1)  # у звуковой дорожки нет картинки
+            tractor.set_track(playlist, index)
+            self._mix(tractor, index)
+            index += 1
 
         # Дорожки и переходы живут, пока жив трактор: иначе Python освободит их раньше, чем
         # консьюмер перестанет их читать
-        tractor.keep_alive = keep  # type: ignore[attr-defined]
-        tractor.transforms = transforms  # type: ignore[attr-defined]
+        tractor.keep_alive = self._keep  # type: ignore[attr-defined]
+        tractor.transforms = self._transforms  # type: ignore[attr-defined]
         return tractor
+
+    def _append(self, playlist: mlt.Playlist, clip: Clip | FreeClip, kind: str) -> None:
+        producer = self.producer(clip.source, kind)
+        k = self._k
+        # У прокси и оригинала длина может отличаться на пару кадров (переменная
+        # частота кадров оригинала) — не выходим за конец того, что открыто
+        last = min(clip.out_frame * k, producer.get_length()) - 1
+        # В MLT out включительный, в модели — нет
+        playlist.append(producer, clip.in_frame * k, max(clip.in_frame * k, last))
+        if isinstance(clip, AudioClip):
+            return
+        # Вписанный по центру клип MLT ставит сам; qtblend на нём стоил бы 10–20% скорости
+        if clip.transformed or clip.id == self._live:
+            transform = mlt.Filter(self._profile, "qtblend")
+            transform.set("rect", self.rect(clip, clip.x, clip.y, clip.scale))
+            cut = playlist.get_clip(playlist.count() - 1)
+            cut.attach(transform)
+            self._transforms[clip.id] = transform
+            self._keep += [cut, transform]
+
+    def _lane(self, lane: tuple[FreeClip, ...], kind: Callable[[FreeClip], str]) -> mlt.Playlist:
+        """Свободная дорожка: клипы на своих местах, между ними пустоты."""
+        playlist = mlt.Playlist(self._profile)
+        k = self._k
+        position = 0
+        for clip in lane:
+            if clip.start * k > position:
+                playlist.blank(clip.start * k - position - 1)  # blank(out): длина out + 1
+            self._append(playlist, clip, kind(clip))
+            position = clip.end * k
+        self._keep.append(playlist)
+        return playlist
+
+    def _mix(self, tractor: mlt.Tractor, index: int) -> None:
+        mix = mlt.Transition(self._profile, "mix")
+        mix.set("always_active", 1)
+        mix.set("sum", 1)
+        tractor.plant_transition(mix, 0, index)
+        self._keep.append(mix)

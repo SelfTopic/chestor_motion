@@ -298,7 +298,7 @@ def test_detach_split_move_delete_audio(qapp, clip: Path, tmp_path: Path) -> Non
         assert len(session.audioLanes[0]) == 2 and len(session.clips) == 1
 
         right = session.audioLanes[0][1]["id"]
-        session.moveAudio(right, 100, 0)
+        session.moveFree(right, 100, 0)
         assert session.audioLanes[0][1]["start"] == 100
         assert session.project.length == 100 + session.audioLanes[0][1]["length"]
 
@@ -414,6 +414,49 @@ def test_toggle_fill(qapp, clip: Path, tmp_path: Path) -> None:
         assert abs(frame["height"] - 1.0) < 1e-9 and frame["width"] > 1.0
         session.toggleFill()
         assert session.frame["scale"] == 1.0
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_overlay_import_edit_and_target(qapp, clip: Path, red: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        player.seek(10)
+        session.importOverlayPaths([str(red)])
+        (overlay,) = session.overlayClips
+        assert overlay["start"] == 10 and overlay["lane"] == 0
+        assert session.selectedClip == overlay["id"]  # выделено — рамка сразу на нём
+        assert player.length == session.project.length
+        # в кадре сверху вниз: наложение, основной; правится выделенное
+        assert [f["id"] for f in session.frames] == [overlay["id"], session.clips[0]["id"]]
+        assert session.frame["id"] == overlay["id"] and session.frame["scale"] == 0.5
+        session.setTransform(overlay["id"], 0.2, 0.2, 0.3)
+        assert session.frame["x"] == 0.2
+        session.toggleFill()
+        assert session.frame["width"] >= 1.0 and session.frame["height"] >= 1.0
+
+        session.moveFree(overlay["id"], 20, 1)  # единственная дорожка: lane 1 — новая, старая ушла
+        assert session.overlayClips[0]["start"] == 20 and len(session.overlayLanes) == 1
+        player.seek(25)
+        session.splitAtPlayhead()  # режет выделенное наложение, основной не трогает
+        assert len(session.overlayClips) == 2 and len(session.clips) == 1
+        session.detachAudio()
+        assert len(session.audioClips) == 1
+        session.select(session.overlayClips[1]["id"])
+        session.deleteSelectedOrAtPlayhead()
+        assert len(session.overlayClips) == 1
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_overlay_into_empty_project_goes_to_main(qapp, red: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.importOverlayPaths([str(red)])
+        assert len(session.clips) == 1 and not session.overlayClips
     finally:
         session.close()
         player.shutdown()

@@ -1,7 +1,7 @@
 import QtQuick
 
-// Правка положения клипа прямо на превью, как в CapCut: клик по картинке — выделить клип под
-// плейхедом, тянуть — двигать, угловые ручки и колесо — масштаб, двойной щелчок — заполнить
+// Правка положения клипа прямо на превью, как в CapCut: клик по картинке — выделить верхний
+// клип под мышью (наложение или основной), тянуть — двигать, угловые ручки и колесо — масштаб, двойной щелчок — заполнить
 // холст / вписать. Пока тянут, модель не меняется: session.previewTransform двигает картинку,
 // а при отпускании session.setTransform записывает одну правку для отмены.
 Item {
@@ -51,6 +51,16 @@ Item {
         return px >= boxX && px <= boxX + boxW && py >= boxY && py <= boxY + boxH
     }
 
+    // Верхний клип кадра, чья рамка под точкой (session.frames — сверху вниз)
+    function frameAt(px, py) {
+        for (const f of session.frames) {
+            const l = canvas.x + f.left * canvas.width, t = canvas.y + f.top * canvas.height
+            if (px >= l && px <= l + f.width * canvas.width && py >= t && py <= t + f.height * canvas.height)
+                return f
+        }
+        return null
+    }
+
     // Прилипание: к центру холста и к масштабам «вписать» и «заполнить»
     function snapScale(s) {
         s = Math.min(Math.max(s, 0.05), 20)  // как MIN_SCALE…MAX_SCALE в модели
@@ -84,12 +94,20 @@ Item {
         property bool moving: false
 
         onPressed: (mouse) => {
-            if (!editor.inBox(mouse.x, mouse.y)) {
+            // Выделенный клип тащится, даже если сверху другой: иначе маленькое наложение
+            // нельзя было бы вытащить из-под большого
+            const hit = editor.selected && editor.inBox(mouse.x, mouse.y)
+                ? editor.frame : editor.frameAt(mouse.x, mouse.y)
+            if (!hit) {
                 editor.session.select("")
                 mouse.accepted = false
                 return
             }
-            editor.session.select(editor.frame.id)
+            editor.session.select(hit.id)
+            // Кнопка уже нажата (editing) — из модели само не подтянется
+            editor.cx = hit.x
+            editor.cy = hit.y
+            editor.cs = hit.scale
             pressX = mouse.x
             pressY = mouse.y
             startX = editor.cx

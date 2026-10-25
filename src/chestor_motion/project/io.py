@@ -5,10 +5,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from chestor_motion.project.model import AudioClip, Clip, Project
+from chestor_motion.project.model import AudioClip, Clip, OverlayClip, Project
 
 FORMAT = "chestor_motion"
-VERSION = 3
+VERSION = 4
 SUFFIX = ".cmproj"
 
 
@@ -26,10 +26,16 @@ def _v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
     return {**data, "main": [{**c, "x": 0.0, "y": 0.0, "scale": 1.0} for c in data["main"]]}
 
 
+def _v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
+    """v4: дорожки наложений."""
+    return {**data, "overlay_tracks": []}
+
+
 # MIGRATIONS[n] переводит данные версии n в версию n + 1
 MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     1: _v1_to_v2,
     2: _v2_to_v3,
+    3: _v3_to_v4,
 }
 
 
@@ -70,6 +76,24 @@ def to_dict(project: Project) -> dict[str, Any]:
                 for c in lane
             ]
             for lane in project.audio
+        ],
+        "overlay_tracks": [
+            [
+                {
+                    "id": c.id,
+                    "source": c.source,
+                    "source_length": c.source_length,
+                    "in": c.in_frame,
+                    "out": c.out_frame,
+                    "start": c.start,
+                    "audio": c.audio,
+                    "x": c.x,
+                    "y": c.y,
+                    "scale": c.scale,
+                }
+                for c in lane
+            ]
+            for lane in project.overlays
         ],
     }
 
@@ -114,6 +138,24 @@ def from_dict(data: dict[str, Any]) -> Project:
                     for c in lane
                 )
                 for lane in data["audio_tracks"]
+            ),
+            overlays=tuple(
+                tuple(
+                    OverlayClip(
+                        id=str(c["id"]),
+                        source=str(c["source"]),
+                        source_length=int(c["source_length"]),
+                        in_frame=int(c["in"]),
+                        out_frame=int(c["out"]),
+                        start=int(c["start"]),
+                        audio=bool(c["audio"]),
+                        x=float(c["x"]),
+                        y=float(c["y"]),
+                        scale=float(c["scale"]),
+                    )
+                    for c in lane
+                )
+                for lane in data["overlay_tracks"]
             ),
         )
     except (KeyError, TypeError, ValueError) as e:

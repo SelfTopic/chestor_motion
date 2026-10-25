@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Своё окно выбора файлов: быстрые места, недавние папки, поиск по имени (Ctrl+F).
-// mode: "media" — импорт видео и звука (можно несколько), "project" — открыть проект,
-// "folder" — выбрать папку (для экспорта).
+// mode: "media" — импорт видео и звука (можно несколько), "overlay" — видео наложением,
+// "project" — открыть проект, "folder" — выбрать папку (для экспорта).
 Popup {
     id: panel
 
@@ -21,6 +21,7 @@ Popup {
     property bool searching: search.text.trim() !== ""
     property bool busy: false
     property var lastFolder: ({})  // последняя папка для каждого режима
+    readonly property bool multi: mode === "media" || mode === "overlay"
 
     signal accepted(var paths)
 
@@ -68,10 +69,10 @@ Popup {
         const path = entries[index].path
         if (entries[index].isDir) {
             selected = []
-        } else if ((modifiers & Qt.ShiftModifier) && anchorIndex >= 0 && mode === "media") {
+        } else if ((modifiers & Qt.ShiftModifier) && anchorIndex >= 0 && multi) {
             const lo = Math.min(anchorIndex, index), hi = Math.max(anchorIndex, index)
             selected = entries.slice(lo, hi + 1).filter(e => !e.isDir).map(e => e.path)
-        } else if ((modifiers & Qt.ControlModifier) && mode === "media") {
+        } else if ((modifiers & Qt.ControlModifier) && multi) {
             selected = isSelected(path) ? selected.filter(p => p !== path) : selected.concat([path])
             anchorIndex = index
         } else {
@@ -187,7 +188,8 @@ Popup {
 
             Text {
                 text: panel.mode === "project" ? "Открыть проект"
-                    : panel.mode === "folder" ? "Куда сохранить" : "Импорт видео и звука"
+                    : panel.mode === "folder" ? "Куда сохранить"
+                    : panel.mode === "overlay" ? "Наложение: видео поверх основного" : "Импорт видео и звука"
                 color: panel.textMain
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
@@ -463,7 +465,8 @@ Popup {
                         text: panel.busy ? "Ищу…"
                             : panel.searching ? "Ничего не нашлось"
                             : panel.mode === "project" ? "Здесь нет проектов"
-                            : panel.mode === "folder" ? "Здесь нет вложенных папок" : "Здесь нет видео и звука"
+                            : panel.mode === "folder" ? "Здесь нет вложенных папок"
+                            : panel.mode === "overlay" ? "Здесь нет видео" : "Здесь нет видео и звука"
                         color: panel.textDim
                         font.pixelSize: 13
                     }
@@ -477,7 +480,7 @@ Popup {
             spacing: 10
 
             Text {
-                text: panel.mode === "media"
+                text: panel.multi
                       ? "Ctrl/Shift+клик — несколько файлов · двойной клик или Enter — " + "импорт"
                       : panel.mode === "folder" ? "Двойной клик — войти в папку"
                       : "Двойной клик или Enter — открыть"
@@ -513,6 +516,7 @@ Popup {
                 contentItem: Text {
                     text: panel.mode === "project" ? "Открыть"
                         : panel.mode === "folder" ? "Выбрать эту папку"
+                        : panel.mode === "overlay" ? "Наложить"
                         : panel.selected.length > 1 ? "Импортировать (" + panel.selected.length + ")"
                         : "Импортировать"
                     color: "#0f0f11"

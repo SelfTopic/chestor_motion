@@ -35,37 +35,13 @@ Item {
         color: "#2a2a33"
         clip: true
 
-        // Миниатюры: тайлы шириной tileWidth, у каждого — кадр исходника под его серединой
-        Item {
+        Thumbnails {
             id: thumbArea
             width: body.width
             height: body.height - item.waveHeight
-            clip: true
-
-            Repeater {
-                model: item.thumbs ? Math.ceil(body.width / item.thumbs.tileWidth) : 0
-                delegate: Item {
-                    required property int index
-                    readonly property int frame: item.inFrame
-                        + (index + 0.5) * item.thumbs.tileWidth / item.px
-                    readonly property int tile: Math.max(0, Math.min(item.thumbs.count - 1,
-                        Math.floor(frame / item.thumbs.interval)))
-                    x: index * item.thumbs.tileWidth
-                    width: item.thumbs.tileWidth
-                    height: thumbArea.height
-                    clip: true
-
-                    Image {
-                        source: item.thumbs.url
-                        x: -(parent.tile % item.thumbs.columns) * item.thumbs.tileWidth
-                        y: -Math.floor(parent.tile / item.thumbs.columns) * item.thumbs.tileHeight
-                           + (thumbArea.height - item.thumbs.tileHeight) / 2
-                        asynchronous: true
-                        cache: true
-                        smooth: false
-                    }
-                }
-            }
+            thumbs: item.thumbs
+            inFrame: item.inFrame
+            px: item.px
         }
 
         // Звук: полоска под миниатюрами. Рисуется только видимая часть клипа

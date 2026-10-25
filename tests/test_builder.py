@@ -112,7 +112,7 @@ def _render_rms(tractor: mlt.Tractor, profile: mlt.Profile, out: Path) -> list[f
 
 
 def test_detached_and_trimmed_sound_is_heard_only_where_it_is(clip: Path, tmp_path: Path) -> None:
-    from chestor_motion.project.model import detach_audio, trim_audio_end
+    from chestor_motion.project.model import detach_audio, trim_free_end
 
     profile = make_profile(320, 180)
     builder = Builder(profile)
@@ -120,7 +120,7 @@ def test_detached_and_trimmed_sound_is_heard_only_where_it_is(clip: Path, tmp_pa
     project = add_clip(Project(), Clip(str(clip), n, 0, n, id="v"))
     project = detach_audio(project, "v")
     sound = project.audio[0][0]
-    project = trim_audio_end(project, sound.id, 30)  # звук только первую секунду
+    project = trim_free_end(project, sound.id, 30)  # звук только первую секунду
 
     rms = _render_rms(builder.build(project), profile, tmp_path / "a.wav")
     assert len(rms) >= 7
@@ -172,3 +172,34 @@ def test_live_clip_gets_a_filter_to_move(clip: Path) -> None:
     b = Builder(make_profile(180, 320))
     p = add_clip(Project(1080, 1920), Clip(str(clip), 60, 0, 60, id="v"))
     assert set(b.build(p, live="v").transforms) == {"v"}  # type: ignore[attr-defined]
+
+
+def _rgb(tractor: mlt.Tractor, frame: int, w: int, h: int, x: int, y: int) -> tuple[int, ...]:
+    tractor.seek(frame)
+    image = bytes(tractor.get_frame().get_image(mlt.mlt_image_rgba, w, h))
+    return tuple(image[(y * w + x) * 4 : (y * w + x) * 4 + 3])
+
+
+def _is_red(rgb: tuple[int, ...]) -> bool:
+    return rgb[0] > 200 and rgb[1] < 60 and rgb[2] < 60
+
+
+def test_overlay_on_top_only_where_and_when_it_is(clip: Path, red: Path, tmp_path: Path) -> None:
+    from chestor_motion.project.model import OverlayClip, add_overlay
+
+    profile = make_profile(320, 180)
+    b = Builder(profile)
+    n = b.source_length(str(clip))
+    p = add_clip(Project(640, 360), Clip(str(clip), n, 0, n, id="v"))
+    # Красный квадрат на 0.5 с с 10-го кадра, в правом верхнем углу, в 4 раза меньше
+    p = add_overlay(p, OverlayClip(str(red), 30, 0, 15, start=10, x=0.3, y=-0.3, scale=0.25))
+    tractor = b.build(p)
+    assert _is_red(_rgb(tractor, 15, 320, 180, 256, 36))  # в углу — наложение
+    assert not _is_red(_rgb(tractor, 15, 320, 180, 60, 120))  # рядом — основное видео
+    assert not _is_red(_rgb(tractor, 40, 320, 180, 256, 36))  # после конца — снова основное
+
+    rms = _render_rms(b.build(p), profile, tmp_path / "o.wav")  # свежий граф: тот перемотан
+    alone = _render_rms(b.build(add_clip(Project(640, 360), Clip(str(clip), n, 0, n))), profile,
+                        tmp_path / "m.wav")  # fmt: skip
+    assert rms[1] > alone[1] * 1.2  # 0.25–0.5 с: звук наложения добавился к основному
+    assert abs(rms[5] - alone[5]) < 0.01  # после конца наложения — только основной

@@ -15,7 +15,12 @@ from PySide6.QtCore import QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.player import Player
-from chestor_motion.engine.proxy import ProxyJob, clean_stale_parts, proxy_size
+from chestor_motion.engine.proxy import (
+    ProxyJob,
+    clean_stale_parts,
+    enforce_cache_limit,
+    proxy_size,
+)
 from chestor_motion.engine.proxy import default_cache_dir as default_proxy_dir
 from chestor_motion.engine.thumbs import ThumbJob
 from chestor_motion.project import io, model
@@ -58,9 +63,9 @@ class Session(QObject):
         self._cache_dir = cache_dir
         self._data_dir = data_dir or default_data_dir()
         self._state = State(self._data_dir)
-        proxy_dir = cache_dir or default_proxy_dir()
-        if proxy_dir.is_dir():
-            clean_stale_parts(proxy_dir)
+        self._proxy_dir = cache_dir or default_proxy_dir()
+        if self._proxy_dir.is_dir():
+            clean_stale_parts(self._proxy_dir)
         self._path: Path | None = None
         self._saved = Project()
         self._autosave = QTimer(self)
@@ -451,6 +456,7 @@ class Session(QObject):
             return
         self._proxy_done(source)
         self._proxies[source] = proxy
+        enforce_cache_limit(self._proxy_dir, keep={Path(p) for p in self._proxies.values()})
         if self._builder is not None:
             self._builder.forget(source)
             self._rebuild()

@@ -8,6 +8,7 @@
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QStandardPaths, QTimer, Signal
@@ -62,6 +63,30 @@ def ffmpeg_args(source: Path, out: Path, size: tuple[int, int], mode: str) -> li
     return args
 
 
+# Прокси с «каждый кадр ключевой» на длинных видео большие (24-минутная серия 720p — 1.5 ГБ).
+# Сверх лимита удаляются те, которыми дольше всего не пользовались (время изменения файла
+# обновляется при каждом использовании); понадобятся снова — пересоздадутся.
+CACHE_LIMIT_BYTES = 10 * 1024**3
+
+
+def enforce_cache_limit(
+    cache_dir: Path, keep: set[Path], limit: int = CACHE_LIMIT_BYTES
+) -> list[Path]:
+    """Удалить давно не использованные прокси, пока кэш больше limit. keep не трогать."""
+    proxies = [p for p in cache_dir.glob("*.mp4") if not p.name.endswith(".part.mp4")]
+    total = sum(p.stat().st_size for p in proxies)
+    removed = []
+    for proxy in sorted(proxies, key=lambda p: p.stat().st_mtime):
+        if total <= limit:
+            break
+        if proxy in keep:
+            continue
+        total -= proxy.stat().st_size
+        proxy.unlink(missing_ok=True)
+        removed.append(proxy)
+    return removed
+
+
 def clean_stale_parts(cache_dir: Path) -> None:
     """Недоделанные прокси от прошлого запуска (программу закрыли посреди кодирования)."""
     for part in cache_dir.glob("*.part.mp4"):
@@ -101,6 +126,7 @@ class ProxyJob(QObject):
     def start(self) -> None:
         """Сигналы всегда приходят асинхронно, даже если прокси уже в кэше."""
         if self.output.exists():
+            os.utime(self.output)  # «использован сейчас» — для лимита кэша
             QTimer.singleShot(0, self, self._emit_cached)
             return
         self._run()

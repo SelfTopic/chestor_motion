@@ -10,6 +10,7 @@ from chestor_motion.engine.proxy import (
     MODES,
     ProxyJob,
     clean_stale_parts,
+    enforce_cache_limit,
     ffmpeg_args,
     proxy_size,
 )
@@ -71,10 +72,12 @@ def test_proxy_is_constant_30fps(qapp, clip: Path, tmp_path: Path) -> None:
 
 def test_proxy_reused_from_cache(qapp, clip: Path, tmp_path: Path) -> None:
     first = _run(ProxyJob(clip, (320, 180), 2.0, cache_dir=tmp_path))
-    mtime = Path(first).stat().st_mtime_ns
-    second = _run(ProxyJob(clip, (320, 180), 2.0, cache_dir=tmp_path))
+    inode = Path(first).stat().st_ino
+    again = ProxyJob(clip, (320, 180), 2.0, cache_dir=tmp_path)
+    second = _run(again)
     assert second == first
-    assert Path(second).stat().st_mtime_ns == mtime
+    assert again.mode == ""  # ffmpeg не запускался
+    assert Path(second).stat().st_ino == inode
 
 
 def test_args_per_mode() -> None:
@@ -113,3 +116,29 @@ def test_stale_parts_cleaned(tmp_path: Path) -> None:
     (tmp_path / "b.mp4").write_bytes(b"x")
     clean_stale_parts(tmp_path)
     assert [p.name for p in tmp_path.iterdir()] == ["b.mp4"]
+
+
+def test_cache_limit_removes_least_recently_used(tmp_path: Path) -> None:
+    import os
+
+    files = {}
+    for i, name in enumerate(["old", "mid", "new", "kept_old"]):
+        f = tmp_path / f"{name}.mp4"
+        f.write_bytes(b"x" * 100)
+        os.utime(f, (1000 + i, 1000 + i))
+        files[name] = f
+    os.utime(files["kept_old"], (1, 1))  # самый старый, но в текущем проекте
+    (tmp_path / "x.part.mp4").write_bytes(b"x" * 1000)  # недоделанный не считается
+
+    removed = enforce_cache_limit(tmp_path, keep={files["kept_old"]}, limit=250)
+    assert sorted(p.name for p in removed) == ["mid.mp4", "old.mp4"]
+    assert files["new"].exists() and files["kept_old"].exists()
+
+
+def test_cached_proxy_use_marks_it_fresh(qapp, clip: Path, tmp_path: Path) -> None:
+    import os
+
+    first = Path(_run(ProxyJob(clip, (320, 180), 2.0, cache_dir=tmp_path)))
+    os.utime(first, (1, 1))
+    _run(ProxyJob(clip, (320, 180), 2.0, cache_dir=tmp_path))
+    assert first.stat().st_mtime > 1_000_000

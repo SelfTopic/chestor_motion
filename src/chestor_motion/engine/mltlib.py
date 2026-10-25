@@ -31,6 +31,7 @@ _lib.mlt_frame_get_position.restype = ctypes.c_int
 _lib.mlt_frame_get_position.argtypes = [ctypes.c_void_p]
 _lib.mlt_consumer_start.argtypes = [ctypes.c_void_p]
 _lib.mlt_consumer_stop.argtypes = [ctypes.c_void_p]
+_lib.mlt_consumer_purge.argtypes = [ctypes.c_void_p]
 _lib.mlt_producer_seek.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _lib.mlt_producer_set_speed.argtypes = [ctypes.c_void_p, ctypes.c_double]
 _lib.mlt_properties_set_int.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
@@ -73,6 +74,11 @@ def consumer_start(consumer_ptr: int) -> None:
 
 def consumer_stop(consumer_ptr: int) -> None:
     _lib.mlt_consumer_stop(consumer_ptr)
+
+
+def consumer_purge(consumer_ptr: int) -> None:
+    """Выбросить кадры, заготовленные наперёд (буфер ~25 кадров): после seek/pause они устарели."""
+    _lib.mlt_consumer_purge(consumer_ptr)
 
 
 def consumer_refresh(consumer_ptr: int) -> None:

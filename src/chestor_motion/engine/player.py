@@ -123,7 +123,9 @@ class Player(QObject):
         consumer = mlt.Consumer(profile, self._audio_out)
         consumer.set("terminate_on_pause", 0)
         consumer.set("real_time", 1)
-        consumer.set("scrub_audio", 1)
+        # Без звука на паузе: иначе буфер упреждения забивается копиями одного кадра со звуком
+        # и он звучит петлёй (после перемотки на паузе и в конце ролика)
+        consumer.set("scrub_audio", 0)
         consumer.connect(producer)
 
         self._profile, self._producer, self._consumer = profile, producer, consumer
@@ -160,6 +162,7 @@ class Player(QObject):
             return
         mltlib.producer_set_speed(self._producer_ptr, 0)
         mltlib.producer_seek(self._producer_ptr, self._position)
+        mltlib.consumer_purge(self._consumer_ptr)
         self._refresh()
         self._set_playing(False)
 
@@ -173,6 +176,7 @@ class Player(QObject):
             return
         frame = max(0, min(frame, self._length - 1))
         mltlib.producer_seek(self._producer_ptr, frame)
+        mltlib.consumer_purge(self._consumer_ptr)
         self._refresh()
         self._set_position(frame)
 

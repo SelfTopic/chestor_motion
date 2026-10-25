@@ -1,6 +1,7 @@
 import shutil
 from pathlib import Path
 
+import mlt7 as mlt
 import pytest
 
 from chestor_motion.engine.builder import Builder, make_profile
@@ -13,11 +14,18 @@ def builder() -> Builder:
 
 
 def _layout(builder: Builder, project: Project) -> list[tuple[int, int, int, str]]:
-    """(начало на таймлайне, первый кадр, последний кадр, файл) каждого клипа плейлиста."""
-    playlist = builder.build(project)
+    """(начало на таймлайне, первый кадр, последний кадр, файл) каждого клипа дорожки."""
+    return _track(builder.build(project), 0)
+
+
+def _track(tractor: mlt.Tractor, index: int) -> list[tuple[int, int, int, str]]:
+    playlist = mlt.Playlist(tractor.track(index))
     out = []
     for i in range(playlist.count()):
         info = playlist.clip_info(i)
+        if playlist.is_blank(i):
+            out.append((info.start, -1, -1, "blank"))
+            continue
         out.append((info.start, info.frame_in, info.frame_out, Path(info.resource).name))
     return out
 
@@ -68,3 +76,61 @@ def test_resolve_and_forget(clip: Path, tmp_path: Path) -> None:
 def test_missing_file(builder: Builder, tmp_path: Path) -> None:
     with pytest.raises(OSError):
         builder.producer(str(tmp_path / "nope.mp4"))
+
+
+def _render_rms(tractor: mlt.Tractor, profile: mlt.Profile, out: Path) -> list[float]:
+    """Отрендерить звук графа в WAV и вернуть громкость (RMS 0..1) по 0.25 с."""
+    import array
+    import time
+    import wave
+
+    consumer = mlt.Consumer(profile, "avformat", str(out))
+    for key, value in (("vn", 1), ("acodec", "pcm_s16le"), ("ar", 48000), ("ac", 1),
+                       ("real_time", -1), ("terminate_on_pause", 1)):  # fmt: skip
+        consumer.set(key, value)
+    consumer.connect(tractor)
+    consumer.start()
+    deadline = time.time() + 20
+    while not consumer.is_stopped() and time.time() < deadline:
+        time.sleep(0.05)
+    consumer.stop()
+    with wave.open(str(out)) as w:
+        samples = array.array("h", w.readframes(w.getnframes()))
+    step = 12000
+    return [
+        (sum(x * x for x in samples[i : i + step]) / step) ** 0.5 / 32768
+        for i in range(0, len(samples) - step + 1, step)
+    ]
+
+
+def test_detached_and_trimmed_sound_is_heard_only_where_it_is(clip: Path, tmp_path: Path) -> None:
+    from chestor_motion.project.model import detach_audio, trim_audio_end
+
+    profile = make_profile(320, 180)
+    builder = Builder(profile)
+    n = builder.source_length(str(clip))
+    project = add_clip(Project(), Clip(str(clip), n, 0, n, id="v"))
+    project = detach_audio(project, "v")
+    sound = project.audio[0][0]
+    project = trim_audio_end(project, sound.id, 30)  # звук только первую секунду
+
+    rms = _render_rms(builder.build(project), profile, tmp_path / "a.wav")
+    assert len(rms) >= 7
+    assert min(rms[:3]) > 0.05  # первая секунда — тон
+    assert max(rms[5:]) < 0.005  # вторая — тишина: видео без звука, звуковой клип кончился
+
+
+def test_audio_tracks_mix_with_main(clip: Path, tmp_path: Path) -> None:
+    from chestor_motion.project.model import AudioClip, add_audio
+
+    profile = make_profile(320, 180)
+    builder = Builder(profile)
+    n = builder.source_length(str(clip))
+    project = add_clip(Project(), Clip(str(clip), n, 0, n))  # свой звук включён
+    project = add_audio(project, AudioClip(str(clip), n, 0, 30, start=0))
+    both = _render_rms(builder.build(project), profile, tmp_path / "b.wav")
+    alone = _render_rms(builder.build(add_clip(Project(), Clip(str(clip), n, 0, n))), profile,
+                        tmp_path / "c.wav")  # fmt: skip
+    # Где играют оба — громче, чем один основной (складываются, а не заменяют)
+    assert both[1] > alone[1] * 1.5
+    assert abs(both[6] - alone[6]) < 0.01

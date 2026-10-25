@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QStandardPaths, Signal, Slot
 
+from chestor_motion.engine.builder import AUDIO_SUFFIXES
 from chestor_motion.project import io
 from chestor_motion.project.state import State
 from chestor_motion.qt import qproperty
@@ -24,8 +25,8 @@ SEARCH_SKIP = {"node_modules", "__pycache__", "site-packages", ".git", ".venv", 
 
 
 def suffixes(mode: str) -> set[str]:
-    """mode: media — видео для импорта, project — файлы проектов."""
-    return {io.SUFFIX} if mode == "project" else VIDEO_SUFFIXES
+    """mode: media — видео и звук для импорта, project — файлы проектов."""
+    return {io.SUFFIX} if mode == "project" else VIDEO_SUFFIXES | AUDIO_SUFFIXES
 
 
 def entry(path: Path, is_dir: bool, stat: os.stat_result | None = None) -> dict:
@@ -37,6 +38,7 @@ def entry(path: Path, is_dir: bool, stat: os.stat_result | None = None) -> dict:
         "size": 0 if is_dir else stat.st_size,
         "modified": stat.st_mtime * 1000,  # миллисекунды — так удобно Date в QML
         "hidden": path.name.startswith("."),
+        "isAudio": path.suffix.lower() in AUDIO_SUFFIXES,
     }
 
 

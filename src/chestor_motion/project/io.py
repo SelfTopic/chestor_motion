@@ -5,14 +5,24 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from chestor_motion.project.model import Clip, Project
+from chestor_motion.project.model import AudioClip, Clip, Project
 
 FORMAT = "chestor_motion"
-VERSION = 1
+VERSION = 2
 SUFFIX = ".cmproj"
 
+
+def _v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """v2: звуковые дорожки и флаг «свой звук» у видеоклипов."""
+    return {
+        **data,
+        "main": [{**c, "audio": True} for c in data.get("main", [])],
+        "audio_tracks": [],
+    }
+
+
 # MIGRATIONS[n] переводит данные версии n в версию n + 1
-MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {1: _v1_to_v2}
 
 
 class ProjectFormatError(ValueError):
@@ -32,8 +42,23 @@ def to_dict(project: Project) -> dict[str, Any]:
                 "source_length": c.source_length,
                 "in": c.in_frame,
                 "out": c.out_frame,
+                "audio": c.audio,
             }
             for c in project.main
+        ],
+        "audio_tracks": [
+            [
+                {
+                    "id": c.id,
+                    "source": c.source,
+                    "source_length": c.source_length,
+                    "in": c.in_frame,
+                    "out": c.out_frame,
+                    "start": c.start,
+                }
+                for c in lane
+            ]
+            for lane in project.audio
         ],
     }
 
@@ -58,8 +83,23 @@ def from_dict(data: dict[str, Any]) -> Project:
                     source_length=int(c["source_length"]),
                     in_frame=int(c["in"]),
                     out_frame=int(c["out"]),
+                    audio=bool(c["audio"]),
                 )
                 for c in data["main"]
+            ),
+            audio=tuple(
+                tuple(
+                    AudioClip(
+                        id=str(c["id"]),
+                        source=str(c["source"]),
+                        source_length=int(c["source_length"]),
+                        in_frame=int(c["in"]),
+                        out_frame=int(c["out"]),
+                        start=int(c["start"]),
+                    )
+                    for c in lane
+                )
+                for lane in data["audio_tracks"]
             ),
         )
     except (KeyError, TypeError, ValueError) as e:

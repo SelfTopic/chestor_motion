@@ -16,6 +16,7 @@ from chestor_motion.__main__ import QML_DIR
 from chestor_motion.engine.player import Player
 from chestor_motion.files import FileBrowser
 from chestor_motion.session import Session
+from chestor_motion.ui_items import register_qml_types
 from tests.conftest import SILENT_AUDIO_OUT
 
 L = Qt.MouseButton.LeftButton
@@ -29,6 +30,7 @@ class Ui:
         self.session = Session(
             self.player, cache_dir=tmp_path / "proxies", data_dir=tmp_path / "data"
         )
+        register_qml_types()
         self.engine = QQmlApplicationEngine()
         self.warnings: list[str] = []
         self.engine.warnings.connect(lambda ws: self.warnings.extend(w.toString() for w in ws))
@@ -58,6 +60,12 @@ class Ui:
     def track_y(self) -> float:
         return self.tl.mapToScene(QPointF(0, 0)).y() + float(self.tl.property("trackTop")) + 32
 
+    def lane_y(self, lane: int) -> float:
+        top = float(self.tl.property("lanesTop")) + lane * float(self.tl.property("laneStep"))
+        return (
+            self.tl.mapToScene(QPointF(0, 0)).y() + top + float(self.tl.property("laneHeight")) / 2
+        )
+
     def ruler_y(self) -> float:
         return self.tl.mapToScene(QPointF(0, 0)).y() + 12
 
@@ -65,12 +73,16 @@ class Ui:
         QTest.mouseClick(self.win, L, NM, QPoint(round(x), round(y)))
         QTest.qWait(50)
 
-    def drag(self, x0: float, y: float, x1: float, steps: int = 10) -> None:
+    def drag(
+        self, x0: float, y: float, x1: float, steps: int = 10, y1: float | None = None
+    ) -> None:
+        y1 = y if y1 is None else y1
         QTest.mousePress(self.win, L, NM, QPoint(round(x0), round(y)))
         for i in range(1, steps + 1):
-            QTest.mouseMove(self.win, QPoint(round(x0 + (x1 - x0) * i / steps), round(y)))
+            k = i / steps
+            QTest.mouseMove(self.win, QPoint(round(x0 + (x1 - x0) * k), round(y + (y1 - y) * k)))
             QTest.qWait(10)
-        QTest.mouseRelease(self.win, L, NM, QPoint(round(x1), round(y)))
+        QTest.mouseRelease(self.win, L, NM, QPoint(round(x1), round(y1)))
         QTest.qWait(50)
 
     def wheel(self, x: float, y: float, delta: int, mods=NM) -> None:
@@ -312,3 +324,69 @@ def test_hotkeys_panel_scrolls_with_keys(ui: Ui) -> None:
     assert abs(end - (float(scroller.property("contentHeight")) - scroller.height())) < 1
     QTest.keyClick(ui.win, Qt.Key.Key_Home)
     assert float(scroller.property("contentY")) == 0
+
+
+def test_detach_with_d_and_edit_audio_clip_by_mouse(ui: Ui) -> None:
+    first = ui.session.clips[0]
+    ui.click(ui.x(10), ui.track_y())
+    QTest.keyClick(ui.win, Qt.Key.Key_D)
+    QTest.qWait(100)
+    assert ui.session.clips[0]["audio"] is False
+    sound = ui.session.audioClips[0]
+    assert sound["start"] == 0 and sound["length"] == first["length"]
+    assert ui.session.selectedClip == sound["id"]
+
+    # Перетащить вправо на 20 кадров
+    x = ui.x(sound["length"] / 2)
+    ui.drag(x, ui.lane_y(0), x + 20 * ui.px)
+    moved = ui.session.audioClips[0]
+    assert abs(moved["start"] - 20) <= 1
+
+    # Звук второго клипа пересекается с передвинутым — ляжет во вторую дорожку
+    second = ui.session.clips[1]
+    ui.click(ui.x(second["start"] + 5), ui.track_y())
+    QTest.keyClick(ui.win, Qt.Key.Key_D)
+    QTest.qWait(100)
+    assert int(ui.tl.property("laneCount")) == 2
+    lower = next(c for c in ui.session.audioClips if c["lane"] == 1)
+
+    # Утащить его вверх и вправо, в свободное место первой дорожки — вторая исчезает
+    x = ui.x(lower["start"] + 5)
+    target = moved["start"] + moved["length"] + 10
+    ui.drag(x, ui.lane_y(1), x + (target - lower["start"]) * ui.px, y1=ui.lane_y(0))
+    assert int(ui.tl.property("laneCount")) == 1
+    assert sum(1 for c in ui.session.audioClips if c["lane"] == 0) == 2
+
+    # Подрезать конец ручкой
+    clip = ui.session.audioClips[0]
+    ui.click(ui.x(clip["start"] + 5), ui.lane_y(0))
+    end = ui.x(clip["start"] + clip["length"]) - 4
+    ui.drag(end, ui.lane_y(0), end - 10 * ui.px)
+    trimmed = next(c for c in ui.session.audioClips if c["id"] == clip["id"])
+    assert abs(trimmed["length"] - (clip["length"] - 10)) <= 1
+
+    # S режет выделенный звуковой клип, видео не трогает
+    clips_before = len(ui.session.clips)
+    ui.player.seek(trimmed["start"] + 10)
+    QTest.keyClick(ui.win, Qt.Key.Key_S)
+    QTest.qWait(50)
+    assert len(ui.session.clips) == clips_before
+    assert len(ui.session.audioClips) == 3
+
+
+def test_right_click_menu_offers_detach_only_with_own_sound(ui: Ui) -> None:
+    menu = ui.tl.findChild(QObject, "clipMenu")
+    assert menu is not None
+    QTest.mouseClick(
+        ui.win, Qt.MouseButton.RightButton, NM, QPoint(round(ui.x(5)), round(ui.track_y()))
+    )
+    QTest.qWait(100)
+    assert menu.property("visible") and menu.property("hasOwnSound")
+    QTest.keyClick(ui.win, Qt.Key.Key_Escape)
+    QTest.qWait(300)
+    ui.session.detachAudio()
+    QTest.mouseClick(
+        ui.win, Qt.MouseButton.RightButton, NM, QPoint(round(ui.x(5)), round(ui.track_y()))
+    )
+    QTest.qWait(100)
+    assert menu.property("visible") and not menu.property("hasOwnSound")

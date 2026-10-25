@@ -247,3 +247,116 @@ def test_proxies_encode_one_at_a_time(qapp, clip: Path, tmp_path: Path) -> None:
     finally:
         session.close()
         player.shutdown()
+
+
+def test_waves_for_imported_clip(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        loop = QEventLoop()
+        session.wavesChanged.connect(loop.quit)
+        QTimer.singleShot(20_000, loop.quit)
+        loop.exec()
+        peaks = session.waves[str(clip.resolve())]
+        assert peaks.size() == len(bytes(peaks.data())) and peaks.size() >= 58
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_music_goes_to_audio_track_at_playhead(
+    qapp, clip: Path, music: Path, tmp_path: Path
+) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        player.seek(20)
+        session.import_path(music)
+        (lane,) = session.audioLanes
+        assert lane[0]["start"] == 20 and lane[0]["name"] == "music"
+        assert 88 <= lane[0]["length"] <= 92  # 3 с
+        assert player.length == session.project.length == 20 + lane[0]["length"]
+        assert str(music.resolve()) not in session._jobs  # прокси для mp3 не нужен
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_detach_split_move_delete_audio(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        video = session.clips[0]["id"]
+        session.select(video)
+        session.detachAudio()
+        assert session.clips[0]["audio"] is False
+        sound = session.audioLanes[0][0]
+        assert session.selectedClip == sound["id"] and sound["start"] == 0
+
+        player.seek(30)
+        session.splitAtPlayhead()  # выделен звуковой — режется он, а не видео
+        assert len(session.audioLanes[0]) == 2 and len(session.clips) == 1
+
+        right = session.audioLanes[0][1]["id"]
+        session.moveAudio(right, 100, 0)
+        assert session.audioLanes[0][1]["start"] == 100
+        assert session.project.length == 100 + session.audioLanes[0][1]["length"]
+
+        session.select(right)
+        session.deleteSelectedOrAtPlayhead()
+        assert len(session.audioLanes[0]) == 1 and session.selectedClip == ""
+        session.undo()
+        assert len(session.audioLanes[0]) == 2
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_detach_without_selection_uses_clip_under_playhead(
+    qapp, clip: Path, tmp_path: Path
+) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        session.import_path(clip)
+        player.seek(session.clips[1]["start"] + 5)
+        session.detachAudio()
+        assert [c["audio"] for c in session.clips] == [True, False]
+        assert session.audioLanes[0][0]["start"] == session.clips[1]["start"]
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_trim_audio_from_session(qapp, music: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(music)
+        sound = session.audioLanes[0][0]
+        session.trimStart(sound["id"], 30)
+        assert (session.audioLanes[0][0]["start"], session.audioLanes[0][0]["inFrame"]) == (30, 30)
+        session.trimEnd(sound["id"], 60)
+        assert session.audioLanes[0][0]["length"] == 30
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_project_with_audio_reopens(qapp, clip: Path, music: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    session.import_path(clip)
+    session.detachAudio()
+    session.import_path(music)
+    session.save_as(tmp_path / "a.cmproj")
+    saved = session.project
+    session.close()
+    player.shutdown()
+
+    session, player = _session(tmp_path)
+    try:
+        assert session.open_project(tmp_path / "a.cmproj")
+        assert session.project == saved and len(session.audioLanes) >= 1
+        assert player.length == saved.length
+    finally:
+        session.close()
+        player.shutdown()

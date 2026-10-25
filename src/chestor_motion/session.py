@@ -173,6 +173,12 @@ class Session(QObject):
             for lane_index, lane in enumerate(self.project.audio)
         ]
 
+    @qproperty(list, notify=projectChanged)
+    def audioClips(self) -> list:
+        """Все звуковые клипы одним списком (номер дорожки — в lane): QML-повторителю так проще,
+        список списков из Python доходит до QML не как массив JavaScript."""
+        return [c for lane in self.audioLanes for c in lane]
+
     @qproperty(str, notify=selectionChanged)
     def selectedClip(self) -> str:
         return self._selected

@@ -216,3 +216,12 @@ def test_save_load_with_audio(tmp_path: Path) -> None:
     path = tmp_path / "p.cmproj"
     io.save(p, path)
     assert io.load(path) == p
+
+
+def test_move_audio_below_last_lane_makes_new_lane() -> None:
+    p = add_audio(add_audio(Project(), _audio(0, 30, "a")), _audio(100, 30, "b"))
+    assert len(p.audio) == 1
+    p = move_audio(p, "b", 100, lane=1)  # в первой дорожке место есть, но просили новую
+    assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
+    p = move_audio(p, "b", 40, lane=0)  # обратно наверх — нижняя пустеет и исчезает
+    assert [[c.id for c in lane] for lane in p.audio] == [["a", "b"]]

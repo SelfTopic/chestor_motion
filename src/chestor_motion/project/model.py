@@ -237,8 +237,12 @@ def move_audio(project: Project, clip_id: str, start: int, lane: int | None = No
     # Пустую дорожку убираем только после перестановки: иначе клип, один в своей дорожке,
     # при сдвиге вбок перепрыгивал бы в верхнюю
     lanes = _without(project.audio, clip_id, compact=False)
-    preferred = max(0, min(current_lane if lane is None else lane, len(lanes)))
-    placed = _place(lanes, replace(clip, start=max(0, start)), preferred)
+    moved = replace(clip, start=max(0, start))
+    if lane is not None and lane >= len(lanes):
+        placed = (*lanes, (moved,))  # утащили ниже последней дорожки — новая дорожка
+    else:
+        preferred = max(0, current_lane if lane is None else lane)
+        placed = _place(lanes, moved, preferred)
     return replace(project, audio=tuple(lane for lane in placed if lane))
 
 

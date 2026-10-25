@@ -75,6 +75,16 @@ Item {
             height: item.waveHeight
             color: "#16262a"
 
+            // Звук отделён — своя волна блёклая и подпись: звук теперь на звуковой дорожке
+            Text {
+                anchors.centerIn: parent
+                visible: !item.clipData.audio
+                text: "звук отделён"
+                color: "#5f6f72"
+                font.pixelSize: 11
+                z: 1
+            }
+
             Waveform {
                 readonly property real visibleFrom: Math.max(0, item.view.viewX - item.x)
                 readonly property real visibleTo: Math.min(item.width, item.view.viewX + item.view.viewWidth - item.x)
@@ -85,7 +95,7 @@ Item {
                 peaks: item.peaks ?? new ArrayBuffer(0)
                 firstFrame: item.inFrame + visibleFrom / item.px
                 pxPerFrame: item.px
-                color: "#22d3c5"
+                color: item.clipData.audio ? "#22d3c5" : "#2a3a3d"
             }
         }
 
@@ -104,6 +114,7 @@ Item {
     MouseArea {
         id: moveArea
         anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         property real pressSceneX: 0
         property real dragOffset: 0
         property bool dragging: false
@@ -114,9 +125,12 @@ Item {
             dragOffset = 0
             item.view.session.select(item.clipData.id)
             item.view.player.seek(item.clipData.start + Math.floor(mouse.x / item.px))
+            if (mouse.button === Qt.RightButton)
+                item.view.openClipMenu(item.clipData.id, false, item.clipData.audio,
+                                       mapToItem(item.view, mouse.x, mouse.y))
         }
         onPositionChanged: (mouse) => {
-            if (!pressed)
+            if (!pressed || pressedButtons !== Qt.LeftButton)
                 return
             const offset = mapToItem(null, mouse.x, 0).x - pressSceneX
             if (!dragging && Math.abs(offset) > 6) {
@@ -156,61 +170,8 @@ Item {
         item.view.session.moveClip(item.clipData.id, index)
     }
 
-    // --- ручки подрезки у выделенного клипа ---
-    Repeater {
-        model: [true, false]  // левая, правая
-        delegate: Rectangle {
-            id: handle
-            required property bool modelData
-            readonly property bool isLeft: modelData
-            x: isLeft ? 0 : item.width - width
-            width: 10
-            height: item.height
-            radius: 3
-            color: handleArea.pressed ? item.view.accent : "#ffffff"
-            visible: item.selected && !moveArea.dragging
-            z: 3
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 2
-                height: 18
-                radius: 1
-                color: "#141417"
-            }
-
-            MouseArea {
-                id: handleArea
-                anchors.fill: parent
-                anchors.margins: -4
-                cursorShape: Qt.SizeHorCursor
-                property real startX: 0
-                onPressed: (mouse) => startX = mapToItem(null, mouse.x, 0).x
-                onPositionChanged: (mouse) => {
-                    if (!pressed)
-                        return
-                    const frames = Math.round((mapToItem(null, mouse.x, 0).x - startX) / item.px)
-                    const c = item.clipData
-                    if (handle.isLeft)
-                        item.trimIn = Math.max(-c.inFrame, Math.min(c.outFrame - c.inFrame - 1, frames))
-                    else
-                        item.trimOut = Math.max(-(c.outFrame - c.inFrame - 1),
-                                                Math.min(c.sourceLength - c.outFrame, frames))
-                }
-                onReleased: {
-                    // Сначала сбросить своё состояние: вызов сессии пересоздаёт клипы таймлайна
-                    const c = item.clipData
-                    const session = item.view.session
-                    const trimIn = item.trimIn
-                    const trimOut = item.trimOut
-                    item.trimIn = 0
-                    item.trimOut = 0
-                    if (handle.isLeft && trimIn !== 0)
-                        session.trimStart(c.id, c.inFrame + trimIn)
-                    else if (!handle.isLeft && trimOut !== 0)
-                        session.trimEnd(c.id, c.outFrame + trimOut)
-                }
-            }
-        }
+    TrimHandles {
+        clip: item
+        hidden: moveArea.dragging
     }
 }

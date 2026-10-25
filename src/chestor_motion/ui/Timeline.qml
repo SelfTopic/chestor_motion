@@ -16,6 +16,14 @@ Rectangle {
     readonly property int rulerHeight: 26
     readonly property int trackTop: rulerHeight + 10
     readonly property int trackHeight: 84  // миниатюры + полоска звука
+    // Звуковые дорожки под основной
+    readonly property int laneHeight: 44
+    readonly property int laneStep: laneHeight + 6
+    readonly property int laneCount: session.audioLanes.length
+    readonly property int lanesTop: trackTop + trackHeight + 10
+    function laneTop(lane) {
+        return lanesTop + lane * laneStep
+    }
 
     // Масштаб: точек на кадр. Ctrl+колесо меняет его вокруг курсора.
     property real pxPerFrame: 1
@@ -61,7 +69,8 @@ Rectangle {
 
     color: "#141417"
     radius: 12
-    implicitHeight: trackTop + trackHeight + 26  // снизу место под ползунок прокрутки
+    // Снизу — место под ползунок прокрутки
+    implicitHeight: lanesTop + laneCount * laneStep + 16
 
     onWidthChanged: if (!userZoomed) fit()
 
@@ -211,6 +220,29 @@ Rectangle {
             }
         }
 
+        // --- звуковые дорожки ---
+        Repeater {
+            model: timeline.laneCount
+            delegate: Rectangle {
+                required property int index
+                x: 0
+                y: timeline.laneTop(index) - 2
+                width: flick.contentWidth
+                height: timeline.laneHeight + 4
+                color: "#17171b"
+            }
+        }
+        Repeater {
+            model: timeline.session.audioClips
+            delegate: AudioClipItem {
+                required property var modelData
+                clipData: modelData
+                view: timeline
+                selected: timeline.session.selectedClip === modelData.id
+                peaks: timeline.session.waves[modelData.source]
+            }
+        }
+
         // --- плейхед ---
         Item {
             id: playhead
@@ -247,6 +279,64 @@ Rectangle {
                         timeline.player.seek(timeline.frameAt(mapToItem(ruler, mouse.x, 0).x))
                 }
             }
+        }
+    }
+
+    // --- меню клипа по правому клику ---
+    function openClipMenu(clipId, isAudio, hasOwnSound, at) {
+        clipMenu.clipId = clipId
+        clipMenu.isAudio = isAudio
+        clipMenu.hasOwnSound = hasOwnSound
+        clipMenu.popup(at.x, at.y)
+    }
+
+    Menu {
+        id: clipMenu
+        objectName: "clipMenu"
+        property string clipId: ""
+        property bool isAudio: false
+        property bool hasOwnSound: false
+        padding: 6
+        background: Rectangle {
+            implicitWidth: 230
+            color: "#1a1a1e"
+            border.color: "#2c2c33"
+            radius: 10
+        }
+        ClipMenuEntry { text: "Разрезать"; shortcutText: "S"; onTriggered: timeline.session.splitAtPlayhead() }
+        ClipMenuEntry {
+            text: "Отделить звук"
+            shortcutText: "D"
+            visible: !clipMenu.isAudio && clipMenu.hasOwnSound
+            height: visible ? implicitHeight : 0
+            onTriggered: timeline.session.detachAudio()
+        }
+        ClipMenuEntry { text: "Удалить"; shortcutText: "Delete"; onTriggered: timeline.session.deleteSelectedOrAtPlayhead() }
+    }
+
+    component ClipMenuEntry: MenuItem {
+        id: entry
+        property string shortcutText: ""
+        implicitWidth: 230
+        implicitHeight: 32
+        contentItem: Item {
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: entry.text
+                color: "#f2f2f4"
+                font.pixelSize: 13
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                text: entry.shortcutText
+                color: "#8a8a93"
+                font.pixelSize: 12
+            }
+        }
+        background: Rectangle {
+            color: entry.highlighted ? "#2a2a33" : "transparent"
+            radius: 6
         }
     }
 }

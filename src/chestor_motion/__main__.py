@@ -8,6 +8,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from chestor_motion.engine.player import Player
+from chestor_motion.files import FileBrowser
 from chestor_motion.project import io
 from chestor_motion.session import Session
 
@@ -26,7 +27,8 @@ def main() -> int:
     player = Player()
     session = Session(player)
     engine = QQmlApplicationEngine()
-    engine.setInitialProperties({"player": player, "session": session})
+    files = FileBrowser(session.data_dir, session.drafts_dir)
+    engine.setInitialProperties({"player": player, "session": session, "files": files})
     engine.load(QML_DIR / "Main.qml")
     if not engine.rootObjects():
         return 1

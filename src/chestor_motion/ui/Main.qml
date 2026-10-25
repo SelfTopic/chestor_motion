@@ -9,6 +9,11 @@ ApplicationWindow {
 
     required property var player
     required property var session
+    required property var files
+
+    // Пока открыто окно поверх (файлы, справка), клавиши главного окна молчат: иначе «s»,
+    // набранная в поиске, разрезала бы клип
+    readonly property bool modalOpen: fileBrowser.visible || hotkeysPanel.visible
 
     readonly property color bg: "#0f0f11"
     readonly property color panel: "#1a1a1e"
@@ -34,7 +39,8 @@ ApplicationWindow {
 
     // Все клавиши и действия мышью — один список: из него создаются горячие клавиши и
     // панель справки (F1), так справка не разъезжается с тем, что работает на самом деле.
-    // keys пустой — действие мышью, только для справки.
+    // keys пустой — действие мышью, только для справки. local — клавиша своего окна (окна
+    // файлов): в справке есть, но главное окно её не назначает.
     readonly property var hotkeys: [
         { group: "Воспроизведение", keys: ["Space"], label: "Пробел",
           text: "Воспроизвести / пауза", action: () => player.togglePlay() },
@@ -80,26 +86,41 @@ ApplicationWindow {
 
         // Импорт — Ctrl+I, как в CapCut; Ctrl+O открывает проект
         { group: "Проект", keys: ["Ctrl+I"], label: "Ctrl+I",
-          text: "Импорт видео (или перетащи файлы в окно)", action: () => fileDialog.open() },
+          text: "Импорт видео (или перетащи файлы в окно)", action: () => fileBrowser.openFor("media") },
         { group: "Проект", keys: ["Ctrl+N"], label: "Ctrl+N",
           text: "Новый проект", action: () => session.newProject() },
         { group: "Проект", keys: ["Ctrl+O"], label: "Ctrl+O",
-          text: "Открыть проект", action: () => openProjectDialog.open() },
+          text: "Открыть проект", action: () => fileBrowser.openFor("project") },
         { group: "Проект", keys: ["Ctrl+S"], label: "Ctrl+S",
           text: "Сохранить сейчас (и так сохраняется само)", action: () => session.save() },
         { group: "Проект", keys: ["Ctrl+Shift+S"], label: "Ctrl+Shift+S",
           text: "Сохранить как…", action: () => saveAsDialog.open() },
         { group: "Проект", keys: ["F1"], label: "F1",
           text: "Эта справка", action: () => hotkeysPanel.visible ? hotkeysPanel.close() : hotkeysPanel.open() },
+
+        { group: "Окно файлов", keys: ["Ctrl+F"], label: "Ctrl+F", local: true,
+          text: "Поиск по имени во всех подпапках" },
+        { group: "Окно файлов", keys: ["Ctrl+H"], label: "Ctrl+H", local: true,
+          text: "Показать скрытые папки и файлы" },
+        { group: "Окно файлов", keys: ["Backspace"], label: "Backspace", local: true,
+          text: "На уровень вверх" },
+        { group: "Окно файлов", keys: ["Return"], label: "Enter", local: true,
+          text: "Войти в папку или импортировать" },
+        { group: "Окно файлов", keys: [], label: "Ctrl/Shift+клик",
+          text: "Выбрать несколько видео" },
+        { group: "Окно файлов", keys: ["Escape"], label: "Esc", local: true,
+          text: "Очистить поиск, ещё раз — закрыть" },
     ]
 
     Repeater {
-        model: root.hotkeys.filter(h => h.keys.length > 0)
+        model: root.hotkeys.filter(h => h.keys.length > 0 && !h.local)
         // Shortcut ищет окно через родительский элемент — поэтому обёртка Item
         delegate: Item {
             required property var modelData
             Shortcut {
                 sequences: modelData.keys
+                // F1 закрывает справку и поверх неё; остальное — только без окон поверх
+                enabled: !root.modalOpen || (modelData.keys.includes("F1") && !fileBrowser.visible)
                 onActivated: modelData.action()
             }
         }
@@ -111,19 +132,16 @@ ApplicationWindow {
         hotkeys: root.hotkeys
     }
 
-    FileDialog {
-        id: fileDialog
-        title: "Импорт видео"
-        fileMode: FileDialog.OpenFiles
-        nameFilters: ["Видео (*.mp4 *.mkv *.mov *.webm *.avi)", "Все файлы (*)"]
-        onAccepted: session.importUrls(selectedFiles)
-    }
-
-    FileDialog {
-        id: openProjectDialog
-        title: "Открыть проект"
-        nameFilters: ["Проект chestor_motion (*.cmproj)"]
-        onAccepted: session.openProject(selectedFile)
+    FileBrowser {
+        id: fileBrowser
+        objectName: "fileBrowser"
+        files: root.files
+        onAccepted: (paths) => {
+            if (mode === "project")
+                session.openProjectPath(paths[0])
+            else
+                session.importPaths(paths)
+        }
     }
 
     FileDialog {
@@ -131,6 +149,7 @@ ApplicationWindow {
         title: "Сохранить проект как"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "cmproj"
+        currentFolder: session.saveFolder
         nameFilters: ["Проект chestor_motion (*.cmproj)"]
         onAccepted: session.saveAs(selectedFile)
     }
@@ -173,7 +192,7 @@ ApplicationWindow {
             Button {
                 id: importButton
                 text: "＋  Импорт"
-                onClicked: fileDialog.open()
+                onClicked: fileBrowser.openFor("media")
                 contentItem: Text {
                     text: importButton.text
                     color: "#0f0f11"
@@ -225,7 +244,7 @@ ApplicationWindow {
                         radius: 10
                     }
                     MenuEntry { text: "Новый проект"; shortcutText: "Ctrl+N"; onTriggered: session.newProject() }
-                    MenuEntry { text: "Открыть…"; shortcutText: "Ctrl+O"; onTriggered: openProjectDialog.open() }
+                    MenuEntry { text: "Открыть…"; shortcutText: "Ctrl+O"; onTriggered: fileBrowser.openFor("project") }
                     MenuEntry { text: "Сохранить"; shortcutText: "Ctrl+S"; onTriggered: session.save() }
                     MenuEntry { text: "Сохранить как…"; shortcutText: "Ctrl+Shift+S"; onTriggered: saveAsDialog.open() }
                 }

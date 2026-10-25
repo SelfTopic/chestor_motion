@@ -7,7 +7,6 @@
 файл. У нового проекта файл появляется при первой правке — черновик в data_dir/drafts.
 """
 
-import json
 from datetime import datetime
 from pathlib import Path
 
@@ -16,11 +15,18 @@ from PySide6.QtCore import QObject, QStandardPaths, QTimer, QUrl, Signal, Slot
 
 from chestor_motion.engine.builder import Builder, make_profile, probe
 from chestor_motion.engine.player import Player
-from chestor_motion.engine.proxy import ProxyJob, proxy_size
+from chestor_motion.engine.proxy import (
+    ProxyJob,
+    clean_stale_parts,
+    enforce_cache_limit,
+    proxy_size,
+)
+from chestor_motion.engine.proxy import default_cache_dir as default_proxy_dir
 from chestor_motion.engine.thumbs import ThumbJob
 from chestor_motion.project import io, model
 from chestor_motion.project.history import History
 from chestor_motion.project.model import Clip, Project
+from chestor_motion.project.state import State
 from chestor_motion.qt import qproperty
 
 # Превью собирается в уменьшенном профиле: в 1080×1920 MLT выдаёт ~39 кадров/с, в 540×960 ~46,
@@ -56,6 +62,10 @@ class Session(QObject):
         self._player = player
         self._cache_dir = cache_dir
         self._data_dir = data_dir or default_data_dir()
+        self._state = State(self._data_dir)
+        self._proxy_dir = cache_dir or default_proxy_dir()
+        if self._proxy_dir.is_dir():
+            clean_stale_parts(self._proxy_dir)
         self._path: Path | None = None
         self._saved = Project()
         self._autosave = QTimer(self)
@@ -67,6 +77,9 @@ class Session(QObject):
         self._builder: Builder | None = None
         self._proxies: dict[str, str] = {}
         self._jobs: dict[str, ProxyJob] = {}
+        # Прокси кодируются по одному: пять файлов разом — пять ffmpeg одновременно
+        self._proxy_queue: list[ProxyJob] = []
+        self._proxy_running: ProxyJob | None = None
         self._progress: dict[str, float] = {}
         self._proxy_sizes: dict[str, tuple[int, int]] = {}
         self._lengths: dict[str, int] = {}
@@ -86,6 +99,14 @@ class Session(QObject):
     @qproperty(str, notify=fileChanged)
     def projectPath(self) -> str:
         return str(self._path) if self._path else ""
+
+    @qproperty(str, notify=fileChanged)
+    def saveFolder(self) -> str:
+        """Где начинать «Сохранить как»: у проекта — его папка, у нового — «Видео»."""
+        if self._path and self._path.parent != self.drafts_dir:
+            return QUrl.fromLocalFile(str(self._path.parent)).toString()
+        movies = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation)
+        return QUrl.fromLocalFile(movies).toString()
 
     @qproperty(str, notify=statusChanged)
     def status(self) -> str:
@@ -135,19 +156,28 @@ class Session(QObject):
         return self._thumbs
 
     @property
+    def data_dir(self) -> Path:
+        return self._data_dir
+
+    @property
+    def drafts_dir(self) -> Path:
+        return self._data_dir / "drafts"
+
+    @property
     def project(self) -> Project:
         return self._history.current
 
     # --- импорт ---
 
-    @Slot(QUrl)
-    def open(self, url: QUrl) -> None:
-        self.import_path(Path(url.toLocalFile()))
-
     @Slot(list)
     def importUrls(self, urls: list[QUrl]) -> None:
         for url in urls:
             self.import_path(Path(url.toLocalFile()))
+
+    @Slot(list)
+    def importPaths(self, paths: list[str]) -> None:
+        for path in paths:
+            self.import_path(Path(path))
 
     def import_path(self, path: Path) -> None:
         source = str(path.resolve())
@@ -235,9 +265,9 @@ class Session(QObject):
         self.flush()
         self._set_project(Project(), None)
 
-    @Slot(QUrl)
-    def openProject(self, url: QUrl) -> None:
-        self.open_project(Path(url.toLocalFile()))
+    @Slot(str)
+    def openProjectPath(self, path: str) -> None:
+        self.open_project(Path(path))
 
     def open_project(self, path: Path) -> bool:
         try:
@@ -277,11 +307,13 @@ class Session(QObject):
 
     def restore_last(self) -> bool:
         """При запуске без файлов — открыть прошлый проект."""
-        try:
-            last = json.loads((self._data_dir / "state.json").read_text()).get("last", "")
-        except (OSError, ValueError, AttributeError):
-            return False
-        return bool(last) and Path(last).exists() and self.open_project(Path(last))
+        last = self._state.get("last", "")
+        return (
+            isinstance(last, str)
+            and bool(last)
+            and Path(last).exists()
+            and self.open_project(Path(last))
+        )
 
     @Slot()
     def flush(self, force: bool = False) -> None:
@@ -293,9 +325,8 @@ class Session(QObject):
         if not project.main and self._path is None:
             return  # пустой новый проект черновиком не нужен
         if self._path is None:
-            drafts = self._data_dir / "drafts"
-            drafts.mkdir(parents=True, exist_ok=True)
-            self._path = drafts / f"Черновик {datetime.now():%Y-%m-%d %H-%M-%S}{io.SUFFIX}"
+            self.drafts_dir.mkdir(parents=True, exist_ok=True)
+            self._path = self.drafts_dir / f"Черновик {datetime.now():%Y-%m-%d %H-%M-%S}{io.SUFFIX}"
             self.fileChanged.emit()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         io.save(project, self._path)
@@ -310,6 +341,8 @@ class Session(QObject):
         for job in [*self._jobs.values(), *self._thumb_jobs.values()]:
             job.cancel()
         self._jobs.clear()
+        self._proxy_queue.clear()
+        self._proxy_running = None
         self._thumb_jobs.clear()
         self._progress.clear()
 
@@ -328,8 +361,7 @@ class Session(QObject):
         self.imported.emit()  # таймлайн подгоняет масштаб под весь проект
 
     def _remember(self, path: Path) -> None:
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        (self._data_dir / "state.json").write_text(json.dumps({"last": str(path)}))
+        self._state.set("last", str(path))
 
     def _has(self, clip_id: str) -> bool:
         return any(c.id == clip_id for c in self.project.main)
@@ -344,7 +376,9 @@ class Session(QObject):
         if self._closed:
             return
         project = self.project
-        if project != self._saved:
+        # Не перезапускать идущий таймер: пересборка бывает и без правки (готов прокси), и она
+        # не должна откладывать сохранение
+        if project != self._saved and not self._autosave.isActive():
             self._autosave.start()
         if not project.main:
             self._player.clear()
@@ -381,8 +415,36 @@ class Session(QObject):
         job.failed.connect(lambda e: self._on_proxy_failed(source, e))
         self._jobs[source] = job
         self._progress[source] = 0.0
-        self._set_status("Создаю прокси…")
-        job.start()
+        if job.output.exists():
+            job.start()  # готовый из кэша — без очереди, кодировать нечего
+            return
+        self._proxy_queue.append(job)
+        self._next_proxy()
+        self._proxy_status()
+
+    def _proxy_status(self) -> None:
+        waiting = len(self._proxy_queue)
+        self._set_status(
+            f"Создаю прокси… (ещё {waiting} в очереди)" if waiting else "Создаю прокси…"
+        )
+
+    def _next_proxy(self) -> None:
+        if self._proxy_running is not None or self._closed:
+            return
+        while self._proxy_queue:
+            job = self._proxy_queue.pop(0)
+            if str(job.source) in self._jobs:  # не отменён, пока ждал
+                self._proxy_running = job
+                self._proxy_status()
+                job.start()
+                return
+
+    def _proxy_done(self, source: str) -> None:
+        job = self._jobs.pop(source, None)
+        self._progress.pop(source, None)
+        if job is not None and job is self._proxy_running:
+            self._proxy_running = None
+            self._next_proxy()
 
     def _on_proxy_progress(self, source: str, progress: float) -> None:
         if source in self._progress:
@@ -392,13 +454,14 @@ class Session(QObject):
     def _on_proxy_ready(self, source: str, proxy: str) -> None:
         if self._closed:
             return
-        self._jobs.pop(source, None)
-        self._progress.pop(source, None)
+        self._proxy_done(source)
         self._proxies[source] = proxy
+        enforce_cache_limit(self._proxy_dir, keep={Path(p) for p in self._proxies.values()})
         if self._builder is not None:
             self._builder.forget(source)
             self._rebuild()
-        self._set_status("" if self._jobs else "Прокси")
+        if not self._jobs:
+            self._set_status("Прокси")
         self._start_thumbs(source, proxy)
 
     def _start_thumbs(self, source: str, proxy: str) -> None:
@@ -424,8 +487,7 @@ class Session(QObject):
         self.thumbsChanged.emit()
 
     def _on_proxy_failed(self, source: str, error: str) -> None:
-        self._jobs.pop(source, None)
-        self._progress.pop(source, None)
+        self._proxy_done(source)
         self._set_status(f"Прокси не создан: {error}")
 
     def _set_status(self, status: str) -> None:

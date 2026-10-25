@@ -2,6 +2,7 @@
 мы только забираем показанный кадр и отдаём его в QVideoSink (масштабирует видеокарта)."""
 
 import mlt7 as mlt
+import shiboken6
 from PySide6.QtCore import Property, QObject, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat, QVideoSink
 
@@ -270,7 +271,11 @@ class Player(QObject):
     @Slot(QVideoFrame, int)
     def _on_frame_shown(self, frame: QVideoFrame, position: int) -> None:
         if self._sink is not None:
-            self._sink.setVideoFrame(frame)
+            # Окно с VideoOutput могло закрыться раньше плеера — тогда его sink уже удалён
+            if shiboken6.isValid(self._sink):
+                self._sink.setVideoFrame(frame)
+            else:
+                self._sink = None
         if self._seek_in_flight is not None and position == self._seek_in_flight:
             self._finish_seek()
         seeking = self._seek_in_flight is not None or self._seek_queued is not None

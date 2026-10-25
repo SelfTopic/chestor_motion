@@ -4,10 +4,11 @@
 перетаскивание ползунка назад или быстро давало ~13 обновлений картинки в секунду, с intra ~30.
 Цена — размер, примерно втрое больше (40 с 1278×590 — 50 МБ), поэтому качество чуть ниже.
 
-Сначала кодирует видеокарта (VA-API), при ошибке — процессор (libx264).
+Способы кодирования пробуются по порядку (см. MODES): видеокарта, гибрид, процессор.
 """
 
 import hashlib
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QStandardPaths, QTimer, Signal
@@ -31,20 +32,65 @@ def proxy_path(source: Path, cache_dir: Path) -> Path:
     return cache_dir / f"{hashlib.sha1(key.encode()).hexdigest()}.mp4"
 
 
-def ffmpeg_args(source: Path, out: Path, size: tuple[int, int], *, vaapi: bool) -> list[str]:
+# Способы кодирования прокси — пробуются по порядку, пока какой-то не сработает.
+# gpu: всё на видеокарте. hybrid: декодирует процессор, кодирует видеокарта — для того, что
+# видеокарта не декодирует (H.264 10-bit на Radeon 610M). cpu: крайний случай.
+# Процессорные части ограничены: 2 потока и пониженный приоритет (см. PRIORITY) — иначе x264
+# с «каждый кадр ключевой» на длинном видео занимал все 8 ядер и грел ноутбук до 89°C.
+MODES = ("gpu", "hybrid", "cpu")
+CPU_THREADS = "2"
+PRIORITY = ["nice", "-n", "10"]
+
+
+def ffmpeg_args(source: Path, out: Path, size: tuple[int, int], mode: str) -> list[str]:
     w, h = size
     args = ["-v", "error", "-nostats", "-progress", "pipe:1", "-y"]
-    if vaapi:
+    if mode == "gpu":
         args += ["-hwaccel", "vaapi", "-hwaccel_device", VAAPI_DEVICE]
         args += ["-hwaccel_output_format", "vaapi", "-i", str(source)]
         args += ["-vf", f"fps={FPS},scale_vaapi=w={w}:h={h}:format=nv12"]
         args += ["-c:v", "h264_vaapi", "-qp", "28"]
+    elif mode == "hybrid":
+        args += ["-threads", CPU_THREADS, "-vaapi_device", VAAPI_DEVICE, "-i", str(source)]
+        args += ["-vf", f"fps={FPS},scale={w}:{h},format=nv12,hwupload"]
+        args += ["-c:v", "h264_vaapi", "-qp", "28"]
     else:
-        args += ["-i", str(source), "-vf", f"fps={FPS},scale={w}:{h}", "-pix_fmt", "yuv420p"]
-        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
+        args += ["-threads", CPU_THREADS, "-i", str(source)]
+        args += ["-vf", f"fps={FPS},scale={w}:{h}", "-pix_fmt", "yuv420p"]
+        args += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", CPU_THREADS]
     args += ["-g", "1", "-map", "0:v:0", "-map", "0:a:0?"]
     args += ["-c:a", "aac", "-ar", "48000", "-ac", "2", str(out)]
     return args
+
+
+# Прокси с «каждый кадр ключевой» на длинных видео большие (24-минутная серия 720p — 1.5 ГБ).
+# Сверх лимита удаляются те, которыми дольше всего не пользовались (время изменения файла
+# обновляется при каждом использовании); понадобятся снова — пересоздадутся.
+CACHE_LIMIT_BYTES = 10 * 1024**3
+
+
+def enforce_cache_limit(
+    cache_dir: Path, keep: set[Path], limit: int = CACHE_LIMIT_BYTES
+) -> list[Path]:
+    """Удалить давно не использованные прокси, пока кэш больше limit. keep не трогать."""
+    proxies = [p for p in cache_dir.glob("*.mp4") if not p.name.endswith(".part.mp4")]
+    total = sum(p.stat().st_size for p in proxies)
+    removed = []
+    for proxy in sorted(proxies, key=lambda p: p.stat().st_mtime):
+        if total <= limit:
+            break
+        if proxy in keep:
+            continue
+        total -= proxy.stat().st_size
+        proxy.unlink(missing_ok=True)
+        removed.append(proxy)
+    return removed
+
+
+def clean_stale_parts(cache_dir: Path) -> None:
+    """Недоделанные прокси от прошлого запуска (программу закрыли посреди кодирования)."""
+    for part in cache_dir.glob("*.part.mp4"):
+        part.unlink(missing_ok=True)
 
 
 def default_cache_dir() -> Path:
@@ -73,12 +119,14 @@ class ProxyJob(QObject):
         cache_dir.mkdir(parents=True, exist_ok=True)
         self.output = proxy_path(source, cache_dir)
         self._part = self.output.with_suffix(".part.mp4")
-        self._vaapi = True
+        self._modes = list(MODES)
+        self.mode = ""  # каким способом делается сейчас
         self._process: QProcess | None = None
 
     def start(self) -> None:
         """Сигналы всегда приходят асинхронно, даже если прокси уже в кэше."""
         if self.output.exists():
+            os.utime(self.output)  # «использован сейчас» — для лимита кэша
             QTimer.singleShot(0, self, self._emit_cached)
             return
         self._run()
@@ -96,7 +144,9 @@ class ProxyJob(QObject):
         process.readyReadStandardOutput.connect(self._on_output)
         process.finished.connect(self._on_finished)
         self._process = process
-        process.start("ffmpeg", ffmpeg_args(self.source, self._part, self._size, vaapi=self._vaapi))
+        self.mode = self._modes.pop(0)
+        args = ffmpeg_args(self.source, self._part, self._size, self.mode)
+        process.start(PRIORITY[0], [*PRIORITY[1:], "ffmpeg", *args])
 
     def _on_output(self) -> None:
         assert self._process is not None
@@ -113,9 +163,8 @@ class ProxyJob(QObject):
             self._part.replace(self.output)
             self.progress.emit(1.0)
             self.finished.emit(str(self.output))
-        elif self._vaapi and status == QProcess.ExitStatus.NormalExit:
-            self._vaapi = False
-            self._run()
+        elif self._modes and status == QProcess.ExitStatus.NormalExit:
+            self._run()  # следующий способ
         else:
             self._part.unlink(missing_ok=True)
             self.failed.emit(error or f"ffmpeg завершился с кодом {code}")

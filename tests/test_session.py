@@ -140,8 +140,12 @@ def test_first_edit_autosaves_a_draft(qapp, clip: Path, tmp_path: Path) -> None:
     try:
         assert session.title == "Новый проект" and session.projectPath == ""
         session.import_path(clip)
-        QTest.qWait(1800)  # AUTOSAVE_MS + запас
-        drafts = list((tmp_path / "data" / "drafts").glob("*.cmproj"))
+        drafts: list[Path] = []
+        for _ in range(50):  # до 5 с; должно сработать через AUTOSAVE_MS
+            QTest.qWait(100)
+            drafts = list((tmp_path / "data" / "drafts").glob("*.cmproj"))
+            if drafts:
+                break
         assert len(drafts) == 1 and session.projectPath == str(drafts[0])
         assert session.title.startswith("Черновик")
         assert io.load(drafts[0]) == session.project
@@ -220,6 +224,26 @@ def test_open_with_missing_source_refuses(qapp, clip: Path, tmp_path: Path) -> N
         assert not session.open_project(tmp_path / "p.cmproj")
         assert "moved.mp4" in session.status
         assert not session.project.main
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_proxies_encode_one_at_a_time(qapp, clip: Path, tmp_path: Path) -> None:
+    copies = []
+    for i in range(3):
+        copy = tmp_path / f"c{i}.mp4"
+        shutil.copy(clip, copy)
+        copies.append(copy)
+    session, player = _session(tmp_path)
+    try:
+        for c in copies:
+            session.import_path(c)
+        assert session._proxy_running is not None and len(session._proxy_queue) == 2
+        assert "в очереди" in session.status
+        _wait_proxies(session)
+        assert len(list((tmp_path / "proxies").glob("*.mp4"))) == 3
+        assert session._proxy_running is None and not session._proxy_queue
     finally:
         session.close()
         player.shutdown()

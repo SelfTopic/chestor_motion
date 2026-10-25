@@ -140,8 +140,12 @@ def test_first_edit_autosaves_a_draft(qapp, clip: Path, tmp_path: Path) -> None:
     try:
         assert session.title == "Новый проект" and session.projectPath == ""
         session.import_path(clip)
-        QTest.qWait(1800)  # AUTOSAVE_MS + запас
-        drafts = list((tmp_path / "data" / "drafts").glob("*.cmproj"))
+        drafts: list[Path] = []
+        for _ in range(50):  # до 5 с; должно сработать через AUTOSAVE_MS
+            QTest.qWait(100)
+            drafts = list((tmp_path / "data" / "drafts").glob("*.cmproj"))
+            if drafts:
+                break
         assert len(drafts) == 1 and session.projectPath == str(drafts[0])
         assert session.title.startswith("Черновик")
         assert io.load(drafts[0]) == session.project

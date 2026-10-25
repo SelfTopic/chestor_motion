@@ -7,7 +7,6 @@
 файл. У нового проекта файл появляется при первой правке — черновик в data_dir/drafts.
 """
 
-import json
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from chestor_motion.engine.thumbs import ThumbJob
 from chestor_motion.project import io, model
 from chestor_motion.project.history import History
 from chestor_motion.project.model import Clip, Project
+from chestor_motion.project.state import State
 from chestor_motion.qt import qproperty
 
 # Превью собирается в уменьшенном профиле: в 1080×1920 MLT выдаёт ~39 кадров/с, в 540×960 ~46,
@@ -56,6 +56,7 @@ class Session(QObject):
         self._player = player
         self._cache_dir = cache_dir
         self._data_dir = data_dir or default_data_dir()
+        self._state = State(self._data_dir)
         self._path: Path | None = None
         self._saved = Project()
         self._autosave = QTimer(self)
@@ -133,6 +134,14 @@ class Session(QObject):
     def thumbs(self) -> dict:
         """Сетки миниатюр по пути к исходнику (см. ThumbJob.info)."""
         return self._thumbs
+
+    @property
+    def data_dir(self) -> Path:
+        return self._data_dir
+
+    @property
+    def drafts_dir(self) -> Path:
+        return self._data_dir / "drafts"
 
     @property
     def project(self) -> Project:
@@ -277,11 +286,13 @@ class Session(QObject):
 
     def restore_last(self) -> bool:
         """При запуске без файлов — открыть прошлый проект."""
-        try:
-            last = json.loads((self._data_dir / "state.json").read_text()).get("last", "")
-        except (OSError, ValueError, AttributeError):
-            return False
-        return bool(last) and Path(last).exists() and self.open_project(Path(last))
+        last = self._state.get("last", "")
+        return (
+            isinstance(last, str)
+            and bool(last)
+            and Path(last).exists()
+            and self.open_project(Path(last))
+        )
 
     @Slot()
     def flush(self, force: bool = False) -> None:
@@ -293,9 +304,8 @@ class Session(QObject):
         if not project.main and self._path is None:
             return  # пустой новый проект черновиком не нужен
         if self._path is None:
-            drafts = self._data_dir / "drafts"
-            drafts.mkdir(parents=True, exist_ok=True)
-            self._path = drafts / f"Черновик {datetime.now():%Y-%m-%d %H-%M-%S}{io.SUFFIX}"
+            self.drafts_dir.mkdir(parents=True, exist_ok=True)
+            self._path = self.drafts_dir / f"Черновик {datetime.now():%Y-%m-%d %H-%M-%S}{io.SUFFIX}"
             self.fileChanged.emit()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         io.save(project, self._path)
@@ -328,8 +338,7 @@ class Session(QObject):
         self.imported.emit()  # таймлайн подгоняет масштаб под весь проект
 
     def _remember(self, path: Path) -> None:
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        (self._data_dir / "state.json").write_text(json.dumps({"last": str(path)}))
+        self._state.set("last", str(path))
 
     def _has(self, clip_id: str) -> bool:
         return any(c.id == clip_id for c in self.project.main)
@@ -344,7 +353,9 @@ class Session(QObject):
         if self._closed:
             return
         project = self.project
-        if project != self._saved:
+        # Не перезапускать идущий таймер: пересборка бывает и без правки (готов прокси), и она
+        # не должна откладывать сохранение
+        if project != self._saved and not self._autosave.isActive():
             self._autosave.start()
         if not project.main:
             self._player.clear()

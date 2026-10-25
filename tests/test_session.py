@@ -360,3 +360,60 @@ def test_project_with_audio_reopens(qapp, clip: Path, music: Path, tmp_path: Pat
     finally:
         session.close()
         player.shutdown()
+
+
+def test_canvas_presets_and_original(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        assert session.canvas == "original"
+        player.seek(15)
+        session.setCanvas("9:16")
+        assert (session.project.width, session.project.height) == (1080, 1920)
+        assert session.canvas == "9:16"
+        assert player.size == (540, 960) and player.position == 15  # превью в новом профиле
+        session.setCanvas("1:1")
+        assert player.size == (960, 960)
+        session.undo()
+        assert session.canvas == "9:16"
+        session.setCanvas("original")
+        assert (session.project.width, session.project.height) == (642, 360)
+        assert session.canvas == "original"
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_drag_on_preview_is_one_undo_step(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        session.setCanvas("9:16")
+        clip_id = session.frame["id"]
+        assert session.frame["width"] == 1.0 and session.frame["left"] == 0.0
+        project = session.project
+        for i in range(1, 6):  # тащим: модель и история не меняются
+            session.previewTransform(clip_id, 0.02 * i, 0.0, 1.0 + 0.1 * i)
+        assert session.project is project
+        session.setTransform(clip_id, 0.1, 0.0, 1.5)
+        assert (session.frame["x"], session.frame["scale"]) == (0.1, 1.5)
+        session.undo()
+        assert session.project == project
+    finally:
+        session.close()
+        player.shutdown()
+
+
+def test_toggle_fill(qapp, clip: Path, tmp_path: Path) -> None:
+    session, player = _session(tmp_path)
+    try:
+        session.import_path(clip)
+        session.setCanvas("9:16")
+        session.toggleFill()
+        frame = session.frame
+        assert abs(frame["height"] - 1.0) < 1e-9 and frame["width"] > 1.0
+        session.toggleFill()
+        assert session.frame["scale"] == 1.0
+    finally:
+        session.close()
+        player.shutdown()

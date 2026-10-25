@@ -66,6 +66,9 @@ ApplicationWindow {
         { group: "Монтаж", keys: ["D"], label: "D",
           text: "Отделить звук видеоклипа на звуковую дорожку (выделенного или под плейхедом)",
           action: () => session.detachAudio() },
+        { group: "Монтаж", keys: ["F"], label: "F",
+          text: "Заполнить холст клипом (выделенным или под плейхедом), ещё раз — вписать",
+          action: () => session.toggleFill() },
         { group: "Монтаж", keys: ["Escape"], label: "Esc",
           text: "Снять выделение", action: () => session.select("") },
         { group: "Монтаж", keys: ["Ctrl+Z"], label: "Ctrl+Z",
@@ -74,6 +77,17 @@ ApplicationWindow {
         // неоднозначным — тогда Qt не вызывает ни один из ярлыков
         { group: "Монтаж", keys: ["Ctrl+Shift+Z", "Ctrl+Y"], label: "Ctrl+Shift+Z",
           text: "Повторить", action: () => session.redo() },
+
+        { group: "Превью", keys: [], label: "Клик по картинке",
+          text: "Выделить клип под плейхедом — появится рамка" },
+        { group: "Превью", keys: [], label: "Тянуть картинку",
+          text: "Двигать клип по холсту; у центра прилипает" },
+        { group: "Превью", keys: [], label: "Углы рамки",
+          text: "Масштаб; прилипает к «вписать» и «заполнить»" },
+        { group: "Превью", keys: [], label: "Колесо",
+          text: "Масштаб выделенного клипа" },
+        { group: "Превью", keys: [], label: "Двойной щелчок",
+          text: "Заполнить холст / вписать обратно (как F)" },
 
         { group: "Таймлайн", keys: [], label: "Клик по клипу",
           text: "Выделить клип и перемотать в это место" },
@@ -177,13 +191,15 @@ ApplicationWindow {
     component MenuEntry: MenuItem {
         id: entry
         property string shortcutText: ""
+        property bool current: false  // выбранный вариант — акцентным цветом
         implicitWidth: 260
         implicitHeight: 34
         contentItem: RowLayout {
             Text {
                 text: entry.text
-                color: "#f2f2f4"
+                color: entry.current ? "#22d3c5" : "#f2f2f4"
                 font.pixelSize: 14
+                font.weight: entry.current ? Font.DemiBold : Font.Normal
                 Layout.fillWidth: true
             }
             Text {
@@ -334,7 +350,8 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: 12
-            color: "#000000"
+            // Холст в кадре чёрный, фон вокруг чуть светлее — видны края холста
+            color: "#131317"
             clip: true
 
             VideoOutput {
@@ -362,6 +379,14 @@ ApplicationWindow {
                     color: root.textDim
                     font.pixelSize: 14
                 }
+            }
+
+            CanvasEditor {
+                anchors.fill: parent
+                session: root.session
+                player: root.player
+                canvas: video.contentRect
+                visible: player.hasMedia
             }
 
             Rectangle {
@@ -415,6 +440,58 @@ ApplicationWindow {
             }
 
             Item { Layout.fillWidth: true }
+
+            Button {
+                id: canvasButton
+                objectName: "canvasButton"
+                onClicked: canvasMenu.open()
+                ToolTip.visible: hovered && !canvasMenu.visible
+                ToolTip.text: "Соотношение сторон холста"
+                ToolTip.delay: 400
+                contentItem: Text {
+                    text: "Холст: " + (session.canvas === "original" ? "оригинал" : session.canvas) + "  ▾"
+                    color: root.textMain
+                    font.pixelSize: 13
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitHeight: 34
+                    radius: 8
+                    color: canvasButton.down || canvasMenu.visible ? "#2a2a33"
+                         : canvasButton.hovered ? "#222228" : "transparent"
+                    border.color: "#3a3a44"
+                }
+
+                Menu {
+                    id: canvasMenu
+                    objectName: "canvasMenu"
+                    x: canvasButton.width - width
+                    y: -height - 4
+                    padding: 6
+                    background: Rectangle {
+                        implicitWidth: 260
+                        color: root.panel
+                        border.color: "#2c2c33"
+                        radius: 10
+                    }
+                    MenuEntry {
+                        text: "9:16"; shortcutText: "Shorts, Reels, TikTok"
+                        current: session.canvas === "9:16"; onTriggered: session.setCanvas("9:16")
+                    }
+                    MenuEntry {
+                        text: "16:9"; shortcutText: "YouTube"
+                        current: session.canvas === "16:9"; onTriggered: session.setCanvas("16:9")
+                    }
+                    MenuEntry {
+                        text: "1:1"; shortcutText: "квадрат"
+                        current: session.canvas === "1:1"; onTriggered: session.setCanvas("1:1")
+                    }
+                    MenuEntry {
+                        text: "Оригинал"; shortcutText: "как первое видео"
+                        current: session.canvas === "original"; onTriggered: session.setCanvas("original")
+                    }
+                }
+            }
         }
 
         Timeline {

@@ -14,8 +14,12 @@ from chestor_motion.project.model import (
     add_clip,
     delete,
     detach_audio,
+    fill_scale,
+    frame_rect,
     move,
     move_audio,
+    set_canvas,
+    set_transform,
     split,
     split_audio,
     trim_audio_end,
@@ -225,3 +229,42 @@ def test_move_audio_below_last_lane_makes_new_lane() -> None:
     assert [[c.id for c in lane] for lane in p.audio] == [["a"], ["b"]]
     p = move_audio(p, "b", 40, lane=0)  # обратно наверх — нижняя пустеет и исчезает
     assert [[c.id for c in lane] for lane in p.audio] == [["a", "b"]]
+
+
+def test_set_canvas_keeps_clips_and_evens_size() -> None:
+    p = add_clip(Project(width=642, height=360), Clip("a.mp4", 60, 0, 60))
+    q = set_canvas(p, 1081, 1921)
+    assert (q.width, q.height) == (1080, 1920) and q.main == p.main
+    with pytest.raises(ValueError):
+        set_canvas(p, 0, 1920)
+
+
+def test_frame_rect_and_fill() -> None:
+    # 16:9 на 9:16: вписан — во всю ширину по центру
+    assert frame_rect((1080, 1920), (1920, 1080), 0, 0, 1) == (0, 656.25, 1080, 607.5)
+    fill = fill_scale((1080, 1920), (1920, 1080))
+    left, top, w, h = frame_rect((1080, 1920), (1920, 1080), 0, 0, fill)
+    assert (round(top), round(h)) == (0, 1920) and left < 0 and w > 1080
+    # сдвиг в долях холста
+    assert frame_rect((1000, 1000), (100, 100), 0.25, -0.5, 0.5)[:2] == (500, -250)
+
+
+def test_set_transform_keeps_through_split_and_clamps(tmp_path: Path) -> None:
+    p = set_transform(_project(100), "c0", 0.1, -0.2, 3.0)
+    p = split(p, 50)
+    assert all((c.x, c.y, c.scale) == (0.1, -0.2, 3.0) for c in p.main)
+    assert set_transform(p, "c0", 0, 0, 1000).main[0].scale == 20.0
+    assert not set_transform(p, "c0", 0, 0, 1).main[0].transformed
+    path = tmp_path / "t.cmproj"
+    io.save(p, path)
+    assert io.load(path) == p
+
+
+def test_v2_file_gets_default_transform(tmp_path: Path) -> None:
+    data = io.to_dict(_project(100))
+    data["version"] = 2
+    for c in data["main"]:
+        del c["x"], c["y"], c["scale"]
+    path = tmp_path / "v2.cmproj"
+    path.write_text(json.dumps(data))
+    assert io.load(path) == _project(100)

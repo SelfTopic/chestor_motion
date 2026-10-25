@@ -35,6 +35,7 @@ _lib.mlt_consumer_purge.argtypes = [ctypes.c_void_p]
 _lib.mlt_producer_seek.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _lib.mlt_producer_set_speed.argtypes = [ctypes.c_void_p, ctypes.c_double]
 _lib.mlt_properties_set_int.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+_lib.mlt_properties_set.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
 
 _initialized = False
 
@@ -84,6 +85,11 @@ def consumer_purge(consumer_ptr: int) -> None:
 def consumer_refresh(consumer_ptr: int) -> None:
     """Перерисовать текущий кадр (после перемотки на паузе). mlt_consumer — это mlt_properties."""
     _lib.mlt_properties_set_int(consumer_ptr, b"refresh", 1)
+
+
+def properties_set(properties_ptr: int, name: str, value: str) -> None:
+    """Свойство работающего фильтра (прямоугольник qtblend, пока клип тащат на превью)."""
+    _lib.mlt_properties_set(properties_ptr, name.encode(), value.encode())
 
 
 def producer_seek(producer_ptr: int, position: int) -> None:
